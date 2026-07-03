@@ -51,7 +51,8 @@ CMaterialPreviewPane::CMaterialPreviewPane()
 	  m_Yaw(0),
 	  m_Pitch(0.35F),
 	  m_Dragging(false),
-	  m_SizeDirty(false)
+	  m_SizeDirty(false),
+	  m_LastRenderTicks(0)
 {
 }
 
@@ -313,6 +314,25 @@ CMaterialPreviewPane::Render()
 	}
 	DX8Wrapper::Set_Render_Target(back_buffer, m_DepthBuffer);
 	back_buffer->Release();
+
+	// Advance WW3D's global sync clock by the real elapsed time so animated UV
+	// mappers (linear-offset scrolling, grid, rotate, ...) keep moving. Their
+	// texture matrices are driven by WW3D::Get_Sync_Time(), which only advances
+	// via WW3D::Sync(). While the viewer is open the main viewport is paused and
+	// no longer calls Sync, so without this the scrolling UVs freeze.
+	{
+		DWORD now = ::GetTickCount();
+		DWORD elapsed = (m_LastRenderTicks != 0) ? (now - m_LastRenderTicks) : 0;
+		m_LastRenderTicks = now;
+		// Clamp the first/stalled frame so a long pause doesn't jump the UVs.
+		if (elapsed > 250) {
+			elapsed = 250;
+		}
+		if (elapsed > 0) {
+			WW3D::Update_Logic_Frame_Time((float)elapsed);
+			WW3D::Sync(true);
+		}
+	}
 
 	WW3D::Begin_Render(true, true, Vector3(bg, bg, bg));
 	WW3D::Render(m_Scene, m_Camera, FALSE, FALSE);

@@ -94,4 +94,10 @@ private:
 	// Set by OnSize; the swap chain is recreated on the next Render() so a
 	// drag-resize recreates at most once per rendered frame.
 	bool				m_SizeDirty;
+
+	// GetTickCount() of the previous Render(); 0 until the first frame. Used to
+	// advance WW3D's global sync clock (WW3D::Sync) so animated UV mappers
+	// (linear-offset / grid / rotate / sine / ...) keep moving while the main
+	// viewport is paused and only this preview is rendering.
+	DWORD				m_LastRenderTicks;
 };
