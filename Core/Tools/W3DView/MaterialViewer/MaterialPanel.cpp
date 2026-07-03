@@ -76,6 +76,7 @@ bool (*g_EditGateCallback)() = nullptr;
 bool (*g_SaveCallback)(const MaterialDocument &) = nullptr;
 void (*g_RevertCallback)() = nullptr;
 void (*g_DirtyChangedCallback)(bool) = nullptr;
+void (*g_ResolveTextureCallback)(TextureData &) = nullptr;
 
 // Tracks the active theme so popups opened from the panel (the swatch color
 // dialog) can request a dark titlebar via DWM.
@@ -687,17 +688,56 @@ QWidget *Build_Texture_Stage_Group(const EditCtx &ctx, MeshMaterialData &mesh, c
 	// them marks the texture as having info so the writer materializes it.
 	auto touch_info = [texture_ptr]() { texture_ptr->hasInfo = true; };
 
+	// A fixed-size thumbnail slot that any of the code below can repopulate.
+	// Its pixmap comes from the host-decoded BGRA pixels (== little-endian
+	// ARGB32); empty pixels show the "not found" text instead.
+	QLabel *thumbnail = new QLabel;
+	thumbnail->setFrameShape(QFrame::StyledPanel);
+	thumbnail->setAlignment(Qt::AlignCenter);
+
+	auto paint_thumbnail = [thumbnail](const TextureData &tex) {
+		if (tex.previewWidth > 0 && tex.previewHeight > 0 &&
+				tex.previewPixels.size() >= (size_t)tex.previewWidth * tex.previewHeight * 4) {
+			QImage image(tex.previewPixels.data(),
+				tex.previewWidth, tex.previewHeight,
+				tex.previewWidth * 4, QImage::Format_ARGB32);
+			thumbnail->setPixmap(QPixmap::fromImage(image.copy()));
+			thumbnail->setText(QString());
+			thumbnail->setFixedSize(tex.previewWidth + 2, tex.previewHeight + 2);
+			thumbnail->setToolTip(tex.resolvedPath.empty()
+				? QString() : QString::fromStdString(tex.resolvedPath));
+		} else {
+			thumbnail->setPixmap(QPixmap());
+			thumbnail->setText(QStringLiteral("(texture file not found)"));
+			// Drop any fixed size left from a previous (found) texture so the
+			// label shrinks back to its text.
+			thumbnail->setMinimumSize(0, 0);
+			thumbnail->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+			thumbnail->setToolTip(QString());
+		}
+	};
+
 	QHBoxLayout *name_row = new QHBoxLayout;
 	if (edit) {
 		// Manual edit is allowed; Browse... opens a file picker but stores only
 		// the stripped filename (with extension) — .w3d texture references are
 		// bare filenames resolved through the texture search paths, never full
-		// paths.
+		// paths. Editing the name re-decodes the thumbnail through the host.
 		QLineEdit *name_edit = new QLineEdit(QString::fromStdString(texture.name));
-		QObject::connect(name_edit, &QLineEdit::textChanged, [texture_ptr, dirty](const QString &t) {
-			texture_ptr->name = t.toStdString();
-			if (dirty) dirty();
-		});
+		QObject::connect(name_edit, &QLineEdit::textChanged,
+			[texture_ptr, dirty, paint_thumbnail](const QString &t) {
+				texture_ptr->name = t.toStdString();
+				// Re-resolve the preview for the new filename (host decodes it).
+				texture_ptr->resolvedPath.clear();
+				texture_ptr->previewWidth = 0;
+				texture_ptr->previewHeight = 0;
+				texture_ptr->previewPixels.clear();
+				if (g_ResolveTextureCallback != nullptr && !texture_ptr->name.empty()) {
+					g_ResolveTextureCallback(*texture_ptr);
+				}
+				paint_thumbnail(*texture_ptr);
+				if (dirty) dirty();
+			});
 		name_row->addWidget(name_edit, 1);
 		name_row->addWidget(Make_Copy_Button(QString::fromStdString(texture.name),
 			"Copy texture filename"));
@@ -711,7 +751,7 @@ QWidget *Build_Texture_Stage_Group(const EditCtx &ctx, MeshMaterialData &mesh, c
 				QStringLiteral("Texture Files (*.tga *.dds);;All Files (*.*)"));
 			if (!picked.isEmpty()) {
 				// Strip the path: store just "name.ext". setText fires
-				// textChanged, which updates the document and marks dirty.
+				// textChanged, which updates the document + thumbnail + dirty.
 				name_edit->setText(QFileInfo(picked).fileName());
 			}
 		});
@@ -734,24 +774,13 @@ QWidget *Build_Texture_Stage_Group(const EditCtx &ctx, MeshMaterialData &mesh, c
 	}
 	layout->addLayout(name_row);
 
-	// Thumbnail decoded on the W3DView side (BGRA == little-endian ARGB32).
-	if (texture.previewWidth > 0 && texture.previewHeight > 0 &&
-			texture.previewPixels.size() >= (size_t)texture.previewWidth * texture.previewHeight * 4) {
-		QImage image(texture.previewPixels.data(),
-			texture.previewWidth, texture.previewHeight,
-			texture.previewWidth * 4, QImage::Format_ARGB32);
-		QLabel *preview = new QLabel;
-		preview->setPixmap(QPixmap::fromImage(image.copy()));
-		preview->setFixedSize(texture.previewWidth + 2, texture.previewHeight + 2);
-		preview->setFrameShape(QFrame::StyledPanel);
-		preview->setAlignment(Qt::AlignCenter);
-		if (!texture.resolvedPath.empty()) {
-			preview->setToolTip(QString::fromStdString(texture.resolvedPath));
-		}
-		layout->addWidget(preview);
-	} else if (present) {
-		QLabel *missing = new QLabel(QStringLiteral("(texture file not found)"));
-		layout->addWidget(missing);
+	// Only show the thumbnail slot for a real (present) texture; an empty
+	// stage stays as before.
+	if (present) {
+		paint_thumbnail(texture);
+		layout->addWidget(thumbnail);
+	} else {
+		delete thumbnail;
 	}
 
 	// Toggles a single bit of texture.attributes; marks info present + dirty.
@@ -1382,6 +1411,11 @@ void SetPanelRevertCallback(void (*callback)())
 void SetPanelDirtyChangedCallback(void (*callback)(bool dirty))
 {
 	g_DirtyChangedCallback = callback;
+}
+
+void SetPanelResolveTextureCallback(void (*callback)(TextureData &texture))
+{
+	g_ResolveTextureCallback = callback;
 }
 
 bool PanelHasUnsavedChanges()

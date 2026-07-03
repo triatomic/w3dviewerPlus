@@ -82,6 +82,13 @@ void SetPanelRevertCallback(void (*callback)());
 // unsaved-changes marker in its title.
 void SetPanelDirtyChangedCallback(void (*callback)(bool dirty));
 
+// Decodes a preview thumbnail for a texture filename (needs the D3D device +
+// file factory, which live on the host side). Fills `resolvedPath` and the
+// preview pixels of `texture` (already carrying the name); leaves them empty
+// when the file cannot be found/decoded. Lets the Textures tab refresh its
+// thumbnail live when the filename is edited.
+void SetPanelResolveTextureCallback(void (*callback)(TextureData &texture));
+
 // True when edit mode has unsaved changes. Lets the host prompt before the
 // document is replaced (File->Open) or the window closes.
 bool PanelHasUnsavedChanges();

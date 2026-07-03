@@ -379,6 +379,7 @@ CMaterialViewerFrame::OnCreate(LPCREATESTRUCT create_struct)
 	W3dMaterialViewer::SetPanelSaveCallback(&CMaterialViewerFrame::SaveThunk);
 	W3dMaterialViewer::SetPanelRevertCallback(&CMaterialViewerFrame::RevertThunk);
 	W3dMaterialViewer::SetPanelDirtyChangedCallback(&CMaterialViewerFrame::DirtyChangedThunk);
+	W3dMaterialViewer::SetPanelResolveTextureCallback(&CMaterialViewerFrame::ResolveTextureThunk);
 #endif
 
 	if (m_PanelWnd == nullptr) {
@@ -824,6 +825,14 @@ CMaterialViewerFrame::DirtyChangedThunk(bool dirty)
 	if (_TheInstance != nullptr) {
 		_TheInstance->OnPanelDirtyChanged(dirty);
 	}
+}
+
+// Re-decodes a single texture thumbnail when its filename is edited. Uses the
+// same host-side decoder as the initial parse (D3D device + file factory).
+void
+CMaterialViewerFrame::ResolveTextureThunk(W3dMaterialViewer::TextureData &texture)
+{
+	Build_Texture_Preview(texture);
 }
 
 void

@@ -99,6 +99,7 @@ private:
 	static bool SaveThunk(const W3dMaterialViewer::MaterialDocument &document);
 	static void RevertThunk();
 	static void DirtyChangedThunk(bool dirty);
+	static void ResolveTextureThunk(W3dMaterialViewer::TextureData &texture);
 
 	// Reloads this file's assets so the preview reflects freshly saved bytes.
 	void ReloadAssetsForPreview();
