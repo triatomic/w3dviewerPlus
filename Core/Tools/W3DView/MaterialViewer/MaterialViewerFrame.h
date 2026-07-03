@@ -90,6 +90,28 @@ private:
 	void OnPanelMeshSelected(const char *meshName);
 	static void PanelMeshSelectedThunk(const char *meshName);
 
+	// Edit-mode host hooks handed to the Qt panel (see MaterialPanel.h).
+	bool RunEditGate();
+	bool SaveDocument(const W3dMaterialViewer::MaterialDocument &document);
+	void RevertDocument();
+	void OnPanelDirtyChanged(bool dirty);
+	static bool EditGateThunk();
+	static bool SaveThunk(const W3dMaterialViewer::MaterialDocument &document);
+	static void RevertThunk();
+	static void DirtyChangedThunk(bool dirty);
+
+	// Reloads this file's assets so the preview reflects freshly saved bytes.
+	void ReloadAssetsForPreview();
+
+	// Save / Discard / Cancel prompt used before the document is replaced;
+	// returns false only when the user cancels.
+	bool PromptSaveIfDirty();
+
+	void UpdateTitle();
+
+	std::string m_SourceFilePath;	// disk path used for the title / reload
+	bool		m_Dirty;
+
 	static CMaterialViewerFrame *_TheInstance;
 
 	CMaterialPreviewPane	*m_Preview;

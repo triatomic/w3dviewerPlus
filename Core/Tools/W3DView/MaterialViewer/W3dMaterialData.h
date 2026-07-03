@@ -108,6 +108,9 @@ struct MeshMaterialData
 struct MaterialDocument
 {
 	std::string	filePath;
+	// Actual on-disk location (factory opens resolve a bare filename through
+	// the search paths). Empty when unknown; edit mode requires it to save.
+	std::string	resolvedDiskPath;
 	std::string	topLevelName;			// HLod name if present, else first mesh's name
 	std::vector<MeshMaterialData>	meshes;
 };

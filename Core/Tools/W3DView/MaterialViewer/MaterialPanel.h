@@ -60,6 +60,36 @@ void SetPanelDocument(const MaterialDocument &document);
 // Selects the given mesh ("Container.Mesh") in the panel's mesh combo, if present.
 void SelectPanelMesh(const char *meshName);
 
+//////////////////////////////////////////////////////////////////////////////
+//	Edit mode
+//////////////////////////////////////////////////////////////////////////////
+
+// Invoked when the user toggles Edit on. The host runs the file-integrity gate
+// (a load/write round trip of the file must reproduce it byte-identically);
+// return false to refuse edit mode (the toggle snaps back to View).
+void SetPanelEditGateCallback(bool (*callback)());
+
+// Invoked when the user clicks Save. Receives the edited document; the host
+// writes it back to disk and refreshes the preview. Return true on success
+// (the panel clears its dirty flag), false to keep the edits dirty.
+void SetPanelSaveCallback(bool (*callback)(const MaterialDocument &document));
+
+// Invoked when the user clicks Revert (or confirms "Discard"): the host
+// re-parses the file from disk and calls SetPanelDocument.
+void SetPanelRevertCallback(void (*callback)());
+
+// Invoked whenever the panel's dirty state changes, so the host can show an
+// unsaved-changes marker in its title.
+void SetPanelDirtyChangedCallback(void (*callback)(bool dirty));
+
+// True when edit mode has unsaved changes. Lets the host prompt before the
+// document is replaced (File->Open) or the window closes.
+bool PanelHasUnsavedChanges();
+
+// Asks the panel to run its Save action (as if the Save button was clicked).
+// Returns true if the document was clean or the save succeeded.
+bool RequestPanelSave();
+
 // Invoked (synchronously, on the UI thread) whenever the panel's mesh combo
 // selection changes; receives the mesh name. Pass null to clear.
 void SetPanelMeshSelectedCallback(void (*callback)(const char *meshName));

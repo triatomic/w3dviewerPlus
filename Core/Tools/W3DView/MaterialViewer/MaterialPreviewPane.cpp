@@ -231,6 +231,18 @@ CMaterialPreviewPane::LoadModel(const char *name)
 }
 
 void
+CMaterialPreviewPane::UnloadModel()
+{
+	if (m_RenderObj != nullptr) {
+		if (m_Scene != nullptr) {
+			m_Scene->Remove_Render_Object(m_RenderObj);
+		}
+		m_RenderObj->Release_Ref();
+		m_RenderObj = nullptr;
+	}
+}
+
+void
 CMaterialPreviewPane::Update_Camera()
 {
 	if (m_Camera == nullptr) {

@@ -21,13 +21,16 @@
 
 #include "MaterialPanel.h"
 #include "MaterialPreviewPane.h"
+#include "W3dChunkTree.h"
 #include "W3dMaterialParser.h"
+#include "W3dMaterialWriter.h"
 #include "../GraphicView.h"
 #include "../resource.h"
 #include "../Utils.h"
 #include "../W3DDarkMode.h"
 #include "../W3DViewDoc.h"
 
+#include "assetmgr.h"
 #include "dx8wrapper.h"
 #include "ffactory.h"
 #include "shader.h"
@@ -244,7 +247,8 @@ void CMaterialViewerFrame::OnUpdateShaderDoubleSided(CCmdUI *cmd_ui)
 CMaterialViewerFrame::CMaterialViewerFrame()
 	: m_Preview(nullptr),
 	  m_PanelWnd(nullptr),
-	  m_ShowFullObject(false)
+	  m_ShowFullObject(false),
+	  m_Dirty(false)
 {
 }
 
@@ -293,7 +297,11 @@ CMaterialViewerFrame::ShowViewerForAsset(const char *objName, const char *source
 	}
 	if (parsed) {
 		Fill_Texture_Previews(frame->m_Document);
+		frame->m_SourceFilePath = frame->m_Document.resolvedDiskPath;
+	} else {
+		frame->m_SourceFilePath.clear();
 	}
+	frame->m_Dirty = false;
 
 	// The full object is the parsed HLod when available, else the clicked asset.
 	frame->m_TopLevelName = (parsed && !frame->m_Document.topLevelName.empty())
@@ -318,13 +326,13 @@ CMaterialViewerFrame::ShowViewerForAsset(const char *objName, const char *source
 
 	frame->UpdatePreviewModel();
 
-	CString title;
 	if (parsed) {
-		title.Format("W3D Material Viewer - %s", sourceFile);
+		frame->UpdateTitle();
 	} else {
+		CString title;
 		title.Format("W3D Material Viewer - %s (source file not found)", objName);
+		frame->SetWindowText(title);
 	}
-	frame->SetWindowText(title);
 }
 
 void
@@ -367,6 +375,10 @@ CMaterialViewerFrame::OnCreate(LPCREATESTRUCT create_struct)
 #ifdef W3DVIEW_HAS_QT
 	m_PanelWnd = W3dMaterialViewer::CreatePanel(m_hWnd);
 	W3dMaterialViewer::SetPanelMeshSelectedCallback(&CMaterialViewerFrame::PanelMeshSelectedThunk);
+	W3dMaterialViewer::SetPanelEditGateCallback(&CMaterialViewerFrame::EditGateThunk);
+	W3dMaterialViewer::SetPanelSaveCallback(&CMaterialViewerFrame::SaveThunk);
+	W3dMaterialViewer::SetPanelRevertCallback(&CMaterialViewerFrame::RevertThunk);
+	W3dMaterialViewer::SetPanelDirtyChangedCallback(&CMaterialViewerFrame::DirtyChangedThunk);
 #endif
 
 	if (m_PanelWnd == nullptr) {
@@ -403,6 +415,11 @@ CMaterialViewerFrame::OnCreate(LPCREATESTRUCT create_struct)
 void
 CMaterialViewerFrame::OnClose()
 {
+	// Guard unsaved edits before the window (and its document) goes away.
+	if (!PromptSaveIfDirty()) {
+		return;
+	}
+
 	// Hand activation back to the owner before the window dies. Otherwise
 	// Windows picks the next window in the Alt+Tab order, which can shove the
 	// main frame to the background or even minimize it.
@@ -509,6 +526,11 @@ CMaterialViewerFrame::Layout(int cx, int cy)
 void
 CMaterialViewerFrame::OnFileOpen()
 {
+	// Opening a new file discards the current one; guard unsaved edits first.
+	if (!PromptSaveIfDirty()) {
+		return;
+	}
+
 	CFileDialog dialog(TRUE, ".w3d", nullptr,
 		OFN_HIDEREADONLY | OFN_FILEMUSTEXIST,
 		"Westwood 3D Files (*.w3d)|*.w3d|All Files (*.*)|*.*||", this);
@@ -525,6 +547,8 @@ CMaterialViewerFrame::OnFileOpen()
 			"W3D Material Viewer", MB_ICONEXCLAMATION | MB_OK);
 		return;
 	}
+
+	m_SourceFilePath = (LPCTSTR)path;
 
 	// Load the assets through the document so texture-path handling and the
 	// asset tree stay consistent with a normal File->Open.
@@ -548,9 +572,8 @@ CMaterialViewerFrame::OnFileOpen()
 
 	UpdatePreviewModel();
 
-	CString title;
-	title.Format("W3D Material Viewer - %s", (LPCTSTR)dialog.GetFileName());
-	SetWindowText(title);
+	m_Dirty = false;
+	UpdateTitle();
 }
 
 void
@@ -613,6 +636,193 @@ CMaterialViewerFrame::PanelMeshSelectedThunk(const char *meshName)
 {
 	if (_TheInstance != nullptr) {
 		_TheInstance->OnPanelMeshSelected(meshName);
+	}
+}
+
+////////////////////////////////////////////////////////////////////////////
+//	Edit mode
+////////////////////////////////////////////////////////////////////////////
+
+void
+CMaterialViewerFrame::UpdateTitle()
+{
+	CString title;
+	if (m_SourceFilePath.empty()) {
+		title = "W3D Material Viewer";
+	} else {
+		const char *slash = ::strrchr(m_SourceFilePath.c_str(), '\\');
+		const char *fwd = ::strrchr(m_SourceFilePath.c_str(), '/');
+		if (fwd > slash) {
+			slash = fwd;
+		}
+		const char *name = slash ? slash + 1 : m_SourceFilePath.c_str();
+		title.Format("W3D Material Viewer - %s%s", name, m_Dirty ? " *" : "");
+	}
+	SetWindowText(title);
+}
+
+// The panel runs this before entering edit mode: refuse to edit any file we
+// cannot reproduce byte-for-byte through the generic chunk tree.
+bool
+CMaterialViewerFrame::RunEditGate()
+{
+	if (m_SourceFilePath.empty()) {
+		::MessageBox(m_hWnd,
+			"This asset's source .w3d file could not be located on disk, so it cannot be edited.",
+			"W3D Material Viewer", MB_ICONEXCLAMATION | MB_OK);
+		return false;
+	}
+
+	std::string error;
+	if (!W3dMaterialViewer::ChunkTreeRoundTripsIdentically(m_SourceFilePath.c_str(), error)) {
+		CString message;
+		message.Format("This file cannot be edited safely:\n\n%s\n\n"
+			"Editing is disabled to avoid corrupting it.", error.c_str());
+		::MessageBox(m_hWnd, message, "W3D Material Viewer", MB_ICONEXCLAMATION | MB_OK);
+		return false;
+	}
+
+	return true;
+}
+
+bool
+CMaterialViewerFrame::SaveDocument(const W3dMaterialViewer::MaterialDocument &document)
+{
+	std::string error;
+	if (!W3dMaterialViewer::SaveMaterialDocument(document, error)) {
+		CString message;
+		message.Format("The file could not be saved:\n\n%s", error.c_str());
+		::MessageBox(m_hWnd, message, "W3D Material Viewer", MB_ICONEXCLAMATION | MB_OK);
+		return false;
+	}
+
+	// Keep our working copy in sync with what is now on disk.
+	m_Document = document;
+	m_Dirty = false;
+
+	ReloadAssetsForPreview();
+	UpdateTitle();
+	return true;
+}
+
+void
+CMaterialViewerFrame::RevertDocument()
+{
+	if (m_SourceFilePath.empty()) {
+		return;
+	}
+
+	W3dMaterialViewer::MaterialDocument fresh;
+	if (!W3dMaterialViewer::ParseMaterialDocument(m_SourceFilePath.c_str(), fresh)) {
+		return;
+	}
+
+	m_Document = fresh;
+	Fill_Texture_Previews(m_Document);
+	m_Dirty = false;
+
+#ifdef W3DVIEW_HAS_QT
+	if (m_PanelWnd != nullptr) {
+		W3dMaterialViewer::SetPanelDocument(m_Document);
+	}
+#endif
+
+	UpdateTitle();
+}
+
+// Force the asset manager to drop this file's prototypes and textures so the
+// next load rebuilds them from the freshly saved bytes (Load_3D_Assets skips
+// prototypes whose names already exist). The main viewport is paused while the
+// viewer is open, so removing prototypes cannot disturb a live render.
+void
+CMaterialViewerFrame::ReloadAssetsForPreview()
+{
+	if (m_SourceFilePath.empty()) {
+		return;
+	}
+
+	// Release the preview's current render object first (it holds a ref that
+	// would otherwise keep the old prototype's data alive).
+	if (m_Preview != nullptr) {
+		m_Preview->UnloadModel();
+	}
+
+	WW3DAssetManager *assets = WW3DAssetManager::Get_Instance();
+	if (assets != nullptr) {
+		for (const W3dMaterialViewer::MeshMaterialData &mesh : m_Document.meshes) {
+			assets->Remove_Prototype(mesh.meshName.c_str());
+		}
+		if (!m_Document.topLevelName.empty()) {
+			assets->Remove_Prototype(m_Document.topLevelName.c_str());
+		}
+		assets->Release_Unused_Textures();
+	}
+
+	CW3DViewDoc *doc = ::GetCurrentDocument();
+	if (doc != nullptr) {
+		doc->LoadAssetsFromFile(m_SourceFilePath.c_str());
+	}
+
+	UpdatePreviewModel();
+}
+
+bool
+CMaterialViewerFrame::PromptSaveIfDirty()
+{
+#ifdef W3DVIEW_HAS_QT
+	if (m_PanelWnd == nullptr || !W3dMaterialViewer::PanelHasUnsavedChanges()) {
+		return true;
+	}
+
+	int choice = ::MessageBox(m_hWnd,
+		"Save the material changes before continuing?",
+		"W3D Material Viewer", MB_ICONWARNING | MB_YESNOCANCEL);
+	if (choice == IDCANCEL) {
+		return false;
+	}
+	if (choice == IDYES) {
+		return W3dMaterialViewer::RequestPanelSave();
+	}
+	// IDNO: discard by reloading the pristine file.
+	RevertDocument();
+	return true;
+#else
+	return true;
+#endif
+}
+
+bool
+CMaterialViewerFrame::EditGateThunk()
+{
+	return (_TheInstance != nullptr) && _TheInstance->RunEditGate();
+}
+
+bool
+CMaterialViewerFrame::SaveThunk(const W3dMaterialViewer::MaterialDocument &document)
+{
+	return (_TheInstance != nullptr) && _TheInstance->SaveDocument(document);
+}
+
+void
+CMaterialViewerFrame::RevertThunk()
+{
+	if (_TheInstance != nullptr) {
+		_TheInstance->RevertDocument();
+	}
+}
+
+void
+CMaterialViewerFrame::OnPanelDirtyChanged(bool dirty)
+{
+	m_Dirty = dirty;
+	UpdateTitle();
+}
+
+void
+CMaterialViewerFrame::DirtyChangedThunk(bool dirty)
+{
+	if (_TheInstance != nullptr) {
+		_TheInstance->OnPanelDirtyChanged(dirty);
 	}
 }
 

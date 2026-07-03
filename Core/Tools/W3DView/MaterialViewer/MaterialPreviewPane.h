@@ -45,6 +45,10 @@ public:
 	// the camera on it. Returns false if the asset does not exist.
 	bool LoadModel(const char *name);
 
+	// Removes the current render object and releases its ref (so the asset
+	// manager can drop the prototype before a reload).
+	void UnloadModel();
+
 	// Renders one frame into the swap chain. Must be called from the main
 	// thread, outside the main view's Begin_Render/End_Render bracket.
 	void Render();

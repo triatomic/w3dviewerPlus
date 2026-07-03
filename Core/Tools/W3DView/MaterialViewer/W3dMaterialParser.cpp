@@ -349,6 +349,7 @@ bool ParseMaterialDocument(const char *path, MaterialDocument &document)
 {
 	document = MaterialDocument();
 	document.filePath = path;
+	document.resolvedDiskPath = path;
 
 	RawFileClass file(path);
 	return Parse_File(file, document);
@@ -362,6 +363,12 @@ bool ParseMaterialDocumentFromFactory(const char *filename, MaterialDocument &do
 	FileClass *file = _TheFileFactory->Get_File(filename);
 	if (file == nullptr) {
 		return false;
+	}
+
+	// Record where the file actually lives so edit mode can save it back.
+	const char *resolved = file->File_Name();
+	if (resolved != nullptr && resolved[0] != '\0') {
+		document.resolvedDiskPath = resolved;
 	}
 
 	bool result = Parse_File(*file, document);
