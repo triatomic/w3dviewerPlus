@@ -27,6 +27,7 @@
 
 #include "MaterialPanel.h"
 
+#include <QtCore/QFileInfo>
 #include <QtGui/QClipboard>
 #include <QtGui/QImage>
 #include <QtGui/QMouseEvent>
@@ -38,6 +39,7 @@
 #include <QtWidgets/QDialog>
 #include <QtWidgets/QDialogButtonBox>
 #include <QtWidgets/QDoubleSpinBox>
+#include <QtWidgets/QFileDialog>
 #include <QtWidgets/QFormLayout>
 #include <QtWidgets/QFrame>
 #include <QtWidgets/QGroupBox>
@@ -687,12 +689,33 @@ QWidget *Build_Texture_Stage_Group(const EditCtx &ctx, MeshMaterialData &mesh, c
 
 	QHBoxLayout *name_row = new QHBoxLayout;
 	if (edit) {
+		// Manual edit is allowed; Browse... opens a file picker but stores only
+		// the stripped filename (with extension) — .w3d texture references are
+		// bare filenames resolved through the texture search paths, never full
+		// paths.
 		QLineEdit *name_edit = new QLineEdit(QString::fromStdString(texture.name));
 		QObject::connect(name_edit, &QLineEdit::textChanged, [texture_ptr, dirty](const QString &t) {
 			texture_ptr->name = t.toStdString();
 			if (dirty) dirty();
 		});
 		name_row->addWidget(name_edit, 1);
+		name_row->addWidget(Make_Copy_Button(QString::fromStdString(texture.name),
+			"Copy texture filename"));
+
+		QPushButton *browse = new QPushButton(QStringLiteral("Browse..."));
+		browse->setToolTip(QStringLiteral("Pick a texture file; only its filename is stored"));
+		QString start_dir = QString::fromStdString(texture.resolvedPath);
+		QObject::connect(browse, &QPushButton::clicked, [name_edit, start_dir]() {
+			QString picked = QFileDialog::getOpenFileName(name_edit,
+				QStringLiteral("Select Texture"), start_dir,
+				QStringLiteral("Texture Files (*.tga *.dds);;All Files (*.*)"));
+			if (!picked.isEmpty()) {
+				// Strip the path: store just "name.ext". setText fires
+				// textChanged, which updates the document and marks dirty.
+				name_edit->setText(QFileInfo(picked).fileName());
+			}
+		});
+		name_row->addWidget(browse);
 	} else {
 		QLabel *name = new QLabel(present ? QString::fromStdString(texture.name) : QStringLiteral("None"));
 		QFont font = name->font();
@@ -810,7 +833,8 @@ public:
 		  m_Scroll(nullptr),
 		  m_CurrentIndex(-1),
 		  m_EditMode(false),
-		  m_Dirty(false)
+		  m_Dirty(false),
+		  m_Building(false)
 	{
 		QVBoxLayout *layout = new QVBoxLayout(this);
 		layout->setContentsMargins(4, 4, 4, 4);
@@ -1029,6 +1053,12 @@ private:
 			g_MeshSelectedCallback(mesh.meshName.c_str());
 		}
 
+		// Suppress dirty marking while the page is under construction: some
+		// controls (e.g. combos whose value is set as the initial index)
+		// legitimately fire change signals during setup, and rebuilding the
+		// page on a View/Edit toggle must never look like a user edit.
+		m_Building = true;
+
 		// Prelit meshes keep several material variants; editing one would desync
 		// them, so they stay read-only even in edit mode (v1).
 		EditCtx ctx;
@@ -1102,6 +1132,8 @@ private:
 
 		layout->addStretch(1);
 		m_Scroll->setWidget(content);
+
+		m_Building = false;
 	}
 
 	// One "Pass N" tab: the Vertex Material / Shader / Textures tab widget.
@@ -1182,6 +1214,10 @@ private:
 
 	void Set_Dirty(bool dirty)
 	{
+		// Ignore change signals emitted while a page is being built.
+		if (dirty && m_Building) {
+			return;
+		}
 		if (dirty == m_Dirty) {
 			// Still refresh button state on first document load.
 			Update_Edit_Buttons();
@@ -1211,6 +1247,7 @@ private:
 	int				m_CurrentIndex;
 	bool			m_EditMode;
 	bool			m_Dirty;
+	bool			m_Building;	// true while Show_Mesh builds a page
 };
 
 //////////////////////////////////////////////////////////////////////////////
