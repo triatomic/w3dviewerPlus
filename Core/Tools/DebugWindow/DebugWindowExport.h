@@ -49,4 +49,9 @@ extern "C" {
 
 	// Call this to add or update a variable value, and simulate pressing Pause immediately after
 	void __declspec(dllexport) AdjustVariableAndPause(const char* variable, const char* value);
+
+	// Returns how many frames the app should wait between variable pushes (>=1).
+	// The value is controlled from the debug window's "Log every N" field; 1 means
+	// push every frame (original behavior).
+	int __declspec(dllexport) GetDebugLogInterval(void);
 }

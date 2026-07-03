@@ -54,16 +54,13 @@ DDSFileClass::DDSFileClass(const char* name,unsigned reduction_factor)
 	Name[len-2]='d';
 	Name[len-1]='s';
 
+	// TheSuperHackers @performance Tria 2026-05-19 Skip redundant Is_Available probe;
+	// the immediately-following Open() already signals existence. RawFileClass::Is_Available
+	// does a full fopen()/fclose() roundtrip, doubling the per-instance file-open count.
 	file_auto_ptr file(_TheFileFactory,Name);
-	if (!file->Is_Available())
-	{
-		return;
-	}
-
 	int result=file->Open();
 	if (!result)
 	{
-		WWASSERT("File would not open");
 		return;
 	}
 
@@ -254,13 +251,14 @@ bool DDSFileClass::Load()
 	if (DDSMemory) return false;
 	if (!LevelSizes || !LevelOffsets) return false;
 
+	// TheSuperHackers @performance Tria 2026-05-19 Skip redundant Is_Available probe;
+	// Open() will fail if the file no longer exists. The Is_Available call did a separate
+	// fopen()/fclose() purely to test existence — doubling our per-instance native opens.
 	file_auto_ptr file(_TheFileFactory,Name);
-	if (!file->Is_Available())
+	if (!file->Open())
 	{
 		return false;
 	}
-
-	file->Open();
 	// Data size is file size minus the header and info block
 	unsigned size=file->Size()-SurfaceDesc.Size-4;
 

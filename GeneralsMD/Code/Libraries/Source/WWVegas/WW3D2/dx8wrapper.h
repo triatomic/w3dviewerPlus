@@ -569,6 +569,10 @@ public:
 
 	static void Set_Draw_Polygon_Low_Bound_Limit(unsigned n) { DrawPolygonLowBoundLimit=n; }
 
+	// TheSuperHackers @feature Tria 17/04/2026 Make MSAA accessors public for W3DView.
+	static void Set_MSAA_Mode(D3DMULTISAMPLE_TYPE mode) { MultiSampleAntiAliasing = mode; }
+	static D3DMULTISAMPLE_TYPE Get_MSAA_Mode() { return MultiSampleAntiAliasing; }
+
 protected:
 
 	static bool	Create_Device();
@@ -605,9 +609,6 @@ protected:
 
 	static void	Set_Texture_Bitdepth(int depth)	{ WWASSERT(depth==16 || depth==32); TextureBitDepth = depth; }
 	static int	Get_Texture_Bitdepth()			{ return TextureBitDepth; }
-
-	static void Set_MSAA_Mode(D3DMULTISAMPLE_TYPE mode) { MultiSampleAntiAliasing = mode; }
-	static D3DMULTISAMPLE_TYPE Get_MSAA_Mode() { return MultiSampleAntiAliasing; }
 
 	static void	Set_Swap_Interval(int swap);
 	static int	Get_Swap_Interval();

@@ -617,11 +617,14 @@ bool WW3DAssetManager::Load_3D_Assets( const char * filename )
 	bool result = false;
 
 	FileClass * file = _TheFileFactory->Get_File( filename );
+	// TheSuperHackers @performance Tria 2026-05-19 Skip redundant Is_Available probe.
+	// The inner Load_3D_Assets(FileClass&) opens the file immediately; a separate
+	// fopen()/fclose() roundtrip here doubles per-load native opens, especially during
+	// load-on-demand chains that re-enter this overload for cross-referenced .w3d files.
 	if ( file ) {
-		if ( file->Is_Available() ) {
-			result = WW3DAssetManager::Load_3D_Assets( *file );
-		} else {
-			WWDEBUG_SAY(("Missing asset '%s'.", filename));
+		result = WW3DAssetManager::Load_3D_Assets( *file );
+		if ( !result ) {
+			WWDEBUG_SAY(("Missing or unreadable asset '%s'.", filename));
 		}
 		_TheFileFactory->Return_File( file );
 	}

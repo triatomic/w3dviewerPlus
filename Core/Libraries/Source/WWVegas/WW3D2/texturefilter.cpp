@@ -194,20 +194,14 @@ void TextureFilterClass::_Init_Filters(TextureFilterMode filter_type)
 
 	case TEXTURE_FILTER_ANISOTROPIC:
 
-		FilterSupported = (dx8caps.TextureFilterCaps & D3DPTFILTERCAPS_MAGFANISOTROPIC) &&
-			(dx8caps.TextureFilterCaps & D3DPTFILTERCAPS_MINFANISOTROPIC);
+		// TheSuperHackers @tweak Tria 17/04/2026 Force anisotropic filtering without caps check.
+		// Modern hardware universally supports anisotropic filtering but the DX8 compatibility
+		// shim on modern Windows may not report the capability flags correctly.
+		_MinTextureFilters[0][FILTER_TYPE_BEST]=D3DTEXF_ANISOTROPIC;
+		_MagTextureFilters[0][FILTER_TYPE_BEST]=D3DTEXF_ANISOTROPIC;
 
-		if (FilterSupported) {
-			_MinTextureFilters[0][FILTER_TYPE_BEST]=D3DTEXF_ANISOTROPIC;
-			_MagTextureFilters[0][FILTER_TYPE_BEST]=D3DTEXF_ANISOTROPIC;
-
-			// Set the Anisotropic filtering level for all stages - 2X by default
-			_Set_Max_Anisotropy(TEXTURE_FILTER_ANISOTROPIC_2X);
-		}
-		else {
-			_MinTextureFilters[0][FILTER_TYPE_BEST]=D3DTEXF_POINT;
-			_MagTextureFilters[0][FILTER_TYPE_BEST]=D3DTEXF_POINT;
-		}
+		// Set the Anisotropic filtering level for all stages - 2X by default
+		_Set_Max_Anisotropy(TEXTURE_FILTER_ANISOTROPIC_2X);
 
 		if (dx8caps.TextureFilterCaps & D3DPTFILTERCAPS_MIPFLINEAR) {
 			_MipMapFilters[0][FILTER_TYPE_BEST]=D3DTEXF_LINEAR;

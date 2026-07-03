@@ -67,6 +67,45 @@ static void _appendMessage(const AsciiString& str, Bool isTrueMessage = true, Bo
 static void _adjustVariable(const AsciiString& str, Int value, Bool shouldPause = false);
 static void _updateFrameNumber();
 static HMODULE st_DebugDLL;
+
+// DebugWindow.dll export pointers, resolved once when the DLL is loaded instead of
+// looking each one up by name (GetProcAddress) on every call, every frame.
+typedef Bool (*DebugBoolFunc)(void);
+typedef void (*DebugVoidFunc)(void);
+typedef void (*DebugMsgFunc)(const char*);
+typedef void (*DebugVarFunc)(const char*, const char*);
+typedef void (*DebugFrameFunc)(int);
+typedef int  (*DebugIntFunc)(void);
+static struct DebugDLLProcs
+{
+	DebugBoolFunc	canAppContinue;
+	DebugBoolFunc	runAppFast;
+	DebugVoidFunc	forceAppContinue;
+	DebugMsgFunc	appendMessage;
+	DebugMsgFunc	appendMessageAndPause;
+	DebugVarFunc	adjustVariable;
+	DebugVarFunc	adjustVariableAndPause;
+	DebugFrameFunc	setFrameNumber;
+	DebugIntFunc	getDebugLogInterval;	// optional; null on older DLLs
+} st_DebugProcs;
+
+// Resolve (or clear) the cached DebugWindow.dll export pointers.
+static void _resolveDebugDLLProcs(void)
+{
+	memset(&st_DebugProcs, 0, sizeof(st_DebugProcs));
+	if (!st_DebugDLL) {
+		return;
+	}
+	st_DebugProcs.canAppContinue        = (DebugBoolFunc) GetProcAddress(st_DebugDLL, "CanAppContinue");
+	st_DebugProcs.runAppFast            = (DebugBoolFunc) GetProcAddress(st_DebugDLL, "RunAppFast");
+	st_DebugProcs.forceAppContinue      = (DebugVoidFunc) GetProcAddress(st_DebugDLL, "ForceAppContinue");
+	st_DebugProcs.appendMessage         = (DebugMsgFunc)  GetProcAddress(st_DebugDLL, "AppendMessage");
+	st_DebugProcs.appendMessageAndPause = (DebugMsgFunc)  GetProcAddress(st_DebugDLL, "AppendMessageAndPause");
+	st_DebugProcs.adjustVariable        = (DebugVarFunc)  GetProcAddress(st_DebugDLL, "AdjustVariable");
+	st_DebugProcs.adjustVariableAndPause= (DebugVarFunc)  GetProcAddress(st_DebugDLL, "AdjustVariableAndPause");
+	st_DebugProcs.setFrameNumber        = (DebugFrameFunc)GetProcAddress(st_DebugDLL, "SetFrameNumber");
+	st_DebugProcs.getDebugLogInterval   = (DebugIntFunc)  GetProcAddress(st_DebugDLL, "GetDebugLogInterval");
+}
 // That's it for debugger window
 
 // These are for particle editor
@@ -479,6 +518,7 @@ ScriptEngine::~ScriptEngine()
 
 		FreeLibrary(st_DebugDLL);
 		st_DebugDLL = nullptr;
+		_resolveDebugDLLProcs();	// clears the cached pointers now that the DLL is gone
 	}
 
 	if (st_ParticleDLL) {
@@ -531,6 +571,7 @@ void ScriptEngine::init()
 		}
 
 		if (st_DebugDLL) {
+			_resolveDebugDLLProcs();
 			FARPROC proc = GetProcAddress(st_DebugDLL, "CreateDebugDialog");
 			if (proc) {
 				proc();
@@ -5601,12 +5642,21 @@ void ScriptEngine::update()
 	// Script debugger stuff
 	st_CurrentFrame++;
 	if (st_DebugDLL) {
-		for (int j = 1; j < m_numCounters; ++j) {
-			_adjustVariable(m_counters[j].name.str(), m_counters[j].value);
+		// Pushing every counter and flag to the debug window every frame is the most
+		// expensive part of running with the DLL. The window's "Log every N" field lets
+		// the user throttle it; default interval is 1 (every frame, original behavior).
+		int logInterval = st_DebugProcs.getDebugLogInterval ? st_DebugProcs.getDebugLogInterval() : 1;
+		if (logInterval < 1) {
+			logInterval = 1;
 		}
+		if ((st_CurrentFrame % logInterval) == 0) {
+			for (int j = 1; j < m_numCounters; ++j) {
+				_adjustVariable(m_counters[j].name.str(), m_counters[j].value);
+			}
 
-		for (int k = 1; k < m_numFlags; ++k) {
-			_adjustVariable(m_flags[k].name.str(), m_flags[k].value);
+			for (int k = 1; k < m_numFlags; ++k) {
+				_adjustVariable(m_flags[k].name.str(), m_flags[k].value);
+			}
 		}
 	}
 #ifdef RTS_DEBUG
@@ -8434,18 +8484,12 @@ void ScriptEngine::doUnfreezeTime()
 //-------------------------------------------------------------------------------------------------
 Bool ScriptEngine::isTimeFrozenDebug()
 {
-	typedef Bool (*funcptr)();
-
 	if (st_DebugDLL) {
 		if (st_LastCurrentFrame != st_CurrentFrame) {
 			st_LastCurrentFrame = st_CurrentFrame;
 
-			FARPROC proc = GetProcAddress(st_DebugDLL, "CanAppContinue");
-			if (proc) {
-				st_CanAppCont = ((funcptr)proc)();
-
-				if (st_CanAppCont) {
-				}
+			if (st_DebugProcs.canAppContinue) {
+				st_CanAppCont = st_DebugProcs.canAppContinue();
 			}
 		}
 		return !st_CanAppCont;
@@ -8458,12 +8502,8 @@ Bool ScriptEngine::isTimeFrozenDebug()
 //-------------------------------------------------------------------------------------------------
 Bool ScriptEngine::isTimeFast()
 {
-	typedef Bool (*funcptr)();
-
 	if (st_DebugDLL) {
-		FARPROC proc = GetProcAddress(st_DebugDLL, "CanAppContinue");
- 		proc = GetProcAddress(st_DebugDLL, "RunAppFast");
-		if (proc && ((funcptr)proc)()) {
+		if (st_DebugProcs.runAppFast && st_DebugProcs.runAppFast()) {
 			st_AppIsFast = true;
 		} else {
 			if (st_AppIsFast) {
@@ -8484,12 +8524,9 @@ Bool ScriptEngine::isTimeFast()
 
 void ScriptEngine::forceUnfreezeTime()
 {
-	typedef void (*funcptr)();
-
 	if (st_DebugDLL) {
-		FARPROC proc = GetProcAddress(st_DebugDLL, "ForceAppContinue");
-		if (proc) {
-			((funcptr)proc)();
+		if (st_DebugProcs.forceAppContinue) {
+			st_DebugProcs.forceAppContinue();
 		}
 	}
 }
@@ -8499,25 +8536,18 @@ void ScriptEngine::AppendDebugMessage(const AsciiString& strToAdd, Bool forcePau
 #ifdef INTENSE_DEBUG
 	DEBUG_LOG(("-SCRIPT- %d %s", TheGameLogic->getFrame(), strToAdd.str()));
 #endif
-	typedef void (*funcptr)(const char*);
 	if (!st_DebugDLL) {
 		return;
 	}
 
-	FARPROC proc;
-	if (forcePause) {
-		proc = GetProcAddress(st_DebugDLL, "AppendMessageAndPause");
-	} else {
-		proc = GetProcAddress(st_DebugDLL, "AppendMessage");
-	}
-
+	DebugMsgFunc proc = forcePause ? st_DebugProcs.appendMessageAndPause : st_DebugProcs.appendMessage;
 	if (!proc) {
 		return;
 	}
 	AsciiString msg;
 	msg.format("%d ", TheGameLogic->getFrame());
 	msg.concat(strToAdd);
-	((funcptr)proc)(msg.str());
+	proc(msg.str());
 }
 
 void ScriptEngine::AdjustDebugVariableData(const AsciiString& variableName, Int value, Bool forcePause)
@@ -9361,8 +9391,6 @@ void ScriptEngine::markMPLocalDefeatWindowShown()
 
 void _appendMessage(const AsciiString& str, Bool isTrueMessage, Bool shouldPause)
 {
-	typedef void (*funcptr)(const char*);
-
 	AsciiString msg;
 	msg.format("%d ", TheGameLogic->getFrame());
 	if (isTrueMessage) {
@@ -9379,33 +9407,21 @@ void _appendMessage(const AsciiString& str, Bool isTrueMessage, Bool shouldPause
 		return;
 	}
 
-	FARPROC proc;
-	if (shouldPause) {
-		proc = GetProcAddress(st_DebugDLL, "AppendMessageAndPause");
-	} else {
-		proc = GetProcAddress(st_DebugDLL, "AppendMessage");
-	}
+	DebugMsgFunc proc = shouldPause ? st_DebugProcs.appendMessageAndPause : st_DebugProcs.appendMessage;
 	if (!proc) {
 		return;
 	}
 
-	((funcptr)proc)(msg.str());
+	proc(msg.str());
 }
 
 void _adjustVariable(const AsciiString& str, Int value, Bool shouldPause)
 {
-	typedef void (*funcptr)(const char*, const char*);
 	if (!st_DebugDLL) {
 		return;
 	}
 
-	FARPROC proc;
-	if (shouldPause) {
-		proc = GetProcAddress(st_DebugDLL, "AdjustVariableAndPause");
-	} else {
-		proc = GetProcAddress(st_DebugDLL, "AdjustVariable");
-	}
-
+	DebugVarFunc proc = shouldPause ? st_DebugProcs.adjustVariableAndPause : st_DebugProcs.adjustVariable;
 	if (!proc) {
 		return;
 	}
@@ -9413,26 +9429,23 @@ void _adjustVariable(const AsciiString& str, Int value, Bool shouldPause)
 	char buff[12];	// for sprintf
 	sprintf(buff, "%d", value);
 
-	((funcptr)proc)(str.str(), buff);
+	proc(str.str(), buff);
 }
 
 void _updateFrameNumber()
 {
 	if (TheScriptEngine->isTimeFast()) return;
-	typedef void (*funcptr)(int);
 	if (!st_DebugDLL) {
 		return;
 	}
 
-	FARPROC proc;
-	proc = GetProcAddress(st_DebugDLL, "SetFrameNumber");
-	if (!proc) {
+	if (!st_DebugProcs.setFrameNumber) {
 		return;
 	}
 
 	UnsignedInt frameNum = TheGameLogic->getFrame();
 
-	((funcptr)proc)(frameNum);
+	st_DebugProcs.setFrameNumber(frameNum);
 }
 
 void _appendAllParticleSystems()

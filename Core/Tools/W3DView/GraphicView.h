@@ -34,6 +34,7 @@
 
 
 // Forward declarations
+class CW3DViewDoc;
 class ParticleEmitterClass;
 
 
@@ -83,6 +84,9 @@ protected:
 	afx_msg void OnMouseMove(UINT nFlags, CPoint point);
 	afx_msg void OnRButtonUp(UINT nFlags, CPoint point);
 	afx_msg void OnRButtonDown(UINT nFlags, CPoint point);
+	afx_msg void OnMButtonDown(UINT nFlags, CPoint point);
+	afx_msg void OnMButtonUp(UINT nFlags, CPoint point);
+	afx_msg BOOL OnMouseWheel(UINT nFlags, short zDelta, CPoint point);
 	afx_msg void OnGetMinMaxInfo(MINMAXINFO FAR* lpMMI);
 	//}}AFX_MSG
 	DECLARE_MESSAGE_MAP()
@@ -195,7 +199,7 @@ protected:
 			//	Fullscreen mode
 			//
 			BOOL					Is_Fullscreen (void) const						{ return !(BOOL)m_iWindowed; }
-			void					Set_Fullscreen (bool fullscreen)				{ m_iWindowed = fullscreen ? 0 : 1; InitializeGraphicView (); }
+			void					Set_Fullscreen (bool fullscreen)				{ int prev = m_iWindowed; m_iWindowed = fullscreen ? 0 : 1; if (!InitializeGraphicView ()) m_iWindowed = prev; }
 
 			//
 			//	Misc
@@ -222,11 +226,20 @@ protected:
 
         /////////////////////////////////////////////////
         //
+        //  Private Methods
+        //
+        void                    Clip_Cursor_To_View (void);
+        bool                    Wrap_Cursor_In_View (CPoint &point);
+        void                    Orbit_Camera (int deltaX, int deltaY, CW3DViewDoc *doc);
+
+        /////////////////////////////////////////////////
+        //
         //  Private Member Data
         //
         BOOL					m_bInitialized;
         BOOL					m_bActive;
         UINT					m_TimerID;
+        UINT					m_TimerPeriod;
         CameraClass	*		m_pCamera;
 		  RenderObjClass *	m_pLightMesh;
 		  bool					m_bLightMeshInScene;
@@ -235,7 +248,10 @@ protected:
 
         BOOL					m_bMouseDown;
         BOOL					m_bRMouseDown;
+        BOOL					m_bMMouseDown;
         POINT					m_lastPoint;
+        POINT					m_mButtonDownPoint;
+        bool					m_AltOnMDown;
 		  int						m_iWindowed;
 		  int						m_UpdateCounter;
 		  float					m_CameraDistance;

@@ -225,7 +225,10 @@ static TextureLoadTaskListClass					_CubeTexLoadFreeList;
 static TextureLoadTaskListClass					_VolTexLoadFreeList;
 
 
-// The background texture loading thread.
+// TheSuperHackers @performance Tria 18/04/2026 Use multiple background loader threads for parallel texture loading.
+static const int LOADER_THREAD_COUNT = 4;
+
+// The background texture loading threads.
 static class LoaderThreadClass : public ThreadClass
 {
 public:
@@ -236,7 +239,7 @@ public:
 #endif
 
 	virtual void Thread_Function() override;
-} _TextureLoadThread;
+} _TextureLoadThreads[LOADER_THREAD_COUNT];
 
 
 // TODO: Legacy - remove this call!
@@ -319,12 +322,15 @@ static bool Is_Format_Compressed(WW3DFormat texture_format,bool allow_compressio
 
 void TextureLoader::Init()
 {
-	WWASSERT(!_TextureLoadThread.Is_Running());
+	WWASSERT(!_TextureLoadThreads[0].Is_Running());
 
 	ThumbnailManagerClass::Init();
 
-	_TextureLoadThread.Execute();
-	_TextureLoadThread.Set_Priority(-4);
+	// TheSuperHackers @performance Tria 18/04/2026 Start multiple loader threads for parallel texture loading.
+	for (int i = 0; i < LOADER_THREAD_COUNT; ++i) {
+		_TextureLoadThreads[i].Execute();
+		_TextureLoadThreads[i].Set_Priority(-4);
+	}
 	TextureInactiveOverrideTime = 0;
 }
 
@@ -332,7 +338,10 @@ void TextureLoader::Init()
 void TextureLoader::Deinit()
 {
 	FastCriticalSectionClass::LockClass lock(_BackgroundCriticalSection);
-	_TextureLoadThread.Stop();
+	// TheSuperHackers @performance Tria 18/04/2026 Stop all loader threads.
+	for (int i = 0; i < LOADER_THREAD_COUNT; ++i) {
+		_TextureLoadThreads[i].Stop();
+	}
 
 	ThumbnailManagerClass::Deinit();
 	TextureLoadTaskClass::Delete_Free_Pool();
@@ -855,6 +864,11 @@ void TextureLoader::Update(void (*network_callback)())
 
 	unsigned long time = timeGetTime();
 
+	// TheSuperHackers @performance Tria 18/04/2026 Limit the number of foreground texture tasks processed
+	// per update to prevent UI freezes when loading many textures at once.
+	const int MAX_FOREGROUND_TASKS_PER_UPDATE = 16;
+	int tasks_processed = 0;
+
 	// while we have tasks on the foreground queue
 	while (TextureLoadTaskClass *task = _ForegroundQueue.Pop_Front()) {
 		UPDATE_NETWORK;
@@ -867,6 +881,10 @@ void TextureLoader::Update(void (*network_callback)())
 			case TextureLoadTaskClass::TASK_LOAD:
 				Process_Foreground_Load(task);
 				break;
+		}
+
+		if (++tasks_processed >= MAX_FOREGROUND_TASKS_PER_UPDATE) {
+			break;
 		}
 	}
 
@@ -1829,6 +1847,19 @@ bool TextureLoadTaskClass::Load_Compressed_Mipmap()
 		return false;
 	}
 
+	// Record the actual .dds path so Get_Full_Path() reflects the file that was loaded.
+	// DDSFileClass silently replaces the extension with .dds, so we mirror that here.
+	{
+		StringClass dds_path(Texture->Get_Full_Path());
+		int len = dds_path.Get_Length();
+		if (len >= 4) {
+			dds_path[len - 3] = 'd';
+			dds_path[len - 2] = 'd';
+			dds_path[len - 1] = 's';
+			Texture->Set_Full_Path(dds_path);
+		}
+	}
+
 	// regular 2d texture
 	unsigned int width	= Get_Width();
 	unsigned int height	= Get_Height();
@@ -1941,32 +1972,14 @@ bool TextureLoadTaskClass::Load_Uncompressed_Mipmap()
 	unsigned src_pitch = src_width * src_bpp;
 
 	if (Reduction)
-	{	//texture needs to be reduced so allocate storage for full-sized version.
-		unsigned char * destination_surface	= new unsigned char[width*height*4];
-		//generate upper mip-levels that will be dropped in final texture
+	{	// TheSuperHackers @performance Tria 18/04/2026 Skip wasted mipmap generation during reduction.
+		// Only the dimension shifts matter; the Copy_Image results were discarded.
 		for (unsigned int level = 0; level < Reduction; ++level) {
-		BitmapHandlerClass::Copy_Image(
-			(unsigned char *)destination_surface,
-			width,
-			height,
-			src_pitch,
-			Get_Format(),
-			src_surface,
-			src_width,
-			src_height,
-			src_pitch,
-			src_format,
-			nullptr,
-			0,
-			true,
-			hsv_shift);
-
 			width			>>= 1;
 			height		>>= 1;
 			src_width	>>= 1;
 			src_height	>>= 1;
 		}
-		delete [] destination_surface;
 	}
 
 	for (unsigned int level = 0; level < Get_Mip_Level_Count(); ++level) {

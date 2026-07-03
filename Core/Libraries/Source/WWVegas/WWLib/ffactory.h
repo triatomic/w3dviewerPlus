@@ -40,6 +40,7 @@
 #include "mutex.h"
 #include "Vector.h"
 #include "wwstring.h"
+#include "hashtemplate.h"
 
 /*
 **
@@ -134,11 +135,18 @@ public:
 	void						Append_Sub_Directory( const char * sub_directory );
 	bool						Get_Strip_Path() const								{ return IsStripPath; }
 	void						Set_Strip_Path( bool set )									{ IsStripPath = set; }
-	void						Reset_Sub_Directory()								{ SubDirectory = ""; }
+	void						Reset_Sub_Directory()								{ SubDirectory = ""; Clear_Path_Cache(); }
+
+	// TheSuperHackers @performance Tria 18/04/2026 Clear the resolved file path cache.
+	void						Clear_Path_Cache();
 
 protected:
 	StringClass				SubDirectory;
 	bool						IsStripPath;
+
+	// TheSuperHackers @performance Tria 18/04/2026 Cache of filename to resolved full path,
+	// avoids repeated filesystem probing across search paths.
+	HashTemplateClass<StringClass, StringClass> PathCache;
 
 	// Mutex must be mutable because const functions lock on it.
 	mutable CriticalSectionClass	Mutex;

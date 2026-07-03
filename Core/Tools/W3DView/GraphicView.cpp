@@ -39,6 +39,7 @@
 #include "ViewerScene.h"
 #include "ScreenCursor.h"
 #include "mesh.h"
+#include "meshmdl.h"
 #include "coltest.h"
 #include "MPU.h"
 #include "dazzle.h"
@@ -47,12 +48,516 @@
 #include "metalmap.h"
 #include "dx8wrapper.h"
 #include "matrix3.h"
-
+#include "shader.h"
+#include "vertmaterial.h"
+#include "htree.h"
+#include "camera.h"
+#include "MaterialViewer/MaterialViewerFrame.h"
 #ifdef RTS_DEBUG
 #define new DEBUG_NEW
 #undef THIS_FILE
 static char THIS_FILE[] = __FILE__;
 #endif
+
+
+struct NameLabel {
+	const char *name;
+	Vector3      worldPos;
+};
+
+// Shared renderer: draws a list of (name, worldPos) labels as a D3D alpha-blended fullscreen
+// quad so text is composited in the back buffer before Present — no post-Present flicker.
+static void Render_Name_Labels (CGraphicView *view, CameraClass *camera,
+	const NameLabel *labels, int numLabels, DWORD labelColor)
+{
+	if (view == nullptr || camera == nullptr || labels == nullptr || numLabels <= 0)
+		return;
+
+	IDirect3DDevice8 *dev = DX8Wrapper::_Get_D3D_Device8 ();
+	if (dev == nullptr)
+		return;
+
+	RECT clientRect;
+	view->GetClientRect (&clientRect);
+	int viewW = clientRect.right - clientRect.left;
+	int viewH = clientRect.bottom - clientRect.top;
+	if (viewW <= 0 || viewH <= 0)
+		return;
+
+	HDC memDC = ::CreateCompatibleDC (nullptr);
+	BITMAPINFO bmi;
+	::ZeroMemory (&bmi, sizeof (bmi));
+	bmi.bmiHeader.biSize        = sizeof (BITMAPINFOHEADER);
+	bmi.bmiHeader.biWidth       = viewW;
+	bmi.bmiHeader.biHeight      = -viewH;
+	bmi.bmiHeader.biPlanes      = 1;
+	bmi.bmiHeader.biBitCount    = 32;
+	bmi.bmiHeader.biCompression = BI_RGB;
+
+	void *dibBits = nullptr;
+	HBITMAP dib = ::CreateDIBSection (memDC, &bmi, DIB_RGB_COLORS, &dibBits, nullptr, 0);
+	if (dib == nullptr || dibBits == nullptr) {
+		if (dib) ::DeleteObject (dib);
+		::DeleteDC (memDC);
+		return;
+	}
+	HBITMAP oldBmp = (HBITMAP)::SelectObject (memDC, dib);
+
+	DWORD *pixels = (DWORD *)dibBits;
+	int pixelCount = viewW * viewH;
+	::ZeroMemory (dibBits, pixelCount * 4);
+
+	::SetTextColor (memDC, RGB (255, 255, 255));
+	::SetBkMode (memDC, TRANSPARENT);
+	HFONT oldFont = (HFONT)::SelectObject (memDC, (HFONT)::GetStockObject (DEFAULT_GUI_FONT));
+
+	for (int i = 0; i < numLabels; ++i) {
+		Vector3 ndc;
+		CameraClass::ProjectionResType res = camera->Project (ndc, labels[i].worldPos);
+		if (res == CameraClass::OUTSIDE_NEAR_CLIP || res == CameraClass::OUTSIDE_FAR_CLIP)
+			continue;
+
+		int sx = (int)((ndc.X * 0.5f + 0.5f) * (float)viewW) + 4;
+		int sy = (int)((0.5f - ndc.Y * 0.5f) * (float)viewH) - 8;
+		::TextOutA (memDC, sx, sy, labels[i].name, (int)strlen (labels[i].name));
+	}
+
+	::SelectObject (memDC, oldFont);
+	::GdiFlush ();
+
+	for (int p = 0; p < pixelCount; ++p) {
+		BYTE lum = (BYTE)(pixels[p] & 0xFF);
+		pixels[p] = ((DWORD)lum << 24) | 0x00FFFFFF;
+	}
+
+	IDirect3DTexture8 *tex = nullptr;
+	if (SUCCEEDED (dev->CreateTexture (viewW, viewH, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &tex)) && tex != nullptr) {
+		D3DLOCKED_RECT lr;
+		if (SUCCEEDED (tex->LockRect (0, &lr, nullptr, 0))) {
+			BYTE *dst = (BYTE *)lr.pBits;
+			const BYTE *src = (const BYTE *)dibBits;
+			for (int y = 0; y < viewH; ++y)
+				::memcpy (dst + y * lr.Pitch, src + y * viewW * 4, viewW * 4);
+			tex->UnlockRect (0);
+
+			struct TLVertex { float x, y, z, rhw; DWORD color; float u, v; };
+			const DWORD FVF_TLVERTEX = D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1;
+			TLVertex verts[4] = {
+				{ 0.0f,         0.0f,         0.0f, 1.0f, labelColor, 0.0f, 0.0f },
+				{ (float)viewW, 0.0f,         0.0f, 1.0f, labelColor, 1.0f, 0.0f },
+				{ 0.0f,         (float)viewH, 0.0f, 1.0f, labelColor, 0.0f, 1.0f },
+				{ (float)viewW, (float)viewH, 0.0f, 1.0f, labelColor, 1.0f, 1.0f },
+			};
+
+			DWORD oldAlphaBlend, oldSrcBlend, oldDestBlend, oldZEnable, oldZWrite, oldCull, oldLighting, oldFog;
+			dev->GetRenderState (D3DRS_ALPHABLENDENABLE, &oldAlphaBlend);
+			dev->GetRenderState (D3DRS_SRCBLEND,         &oldSrcBlend);
+			dev->GetRenderState (D3DRS_DESTBLEND,        &oldDestBlend);
+			dev->GetRenderState (D3DRS_ZENABLE,          &oldZEnable);
+			dev->GetRenderState (D3DRS_ZWRITEENABLE,     &oldZWrite);
+			dev->GetRenderState (D3DRS_CULLMODE,         &oldCull);
+			dev->GetRenderState (D3DRS_LIGHTING,         &oldLighting);
+			dev->GetRenderState (D3DRS_FOGENABLE,        &oldFog);
+
+			DWORD oldColorOp, oldColorArg1, oldColorArg2, oldAlphaOp, oldAlphaArg1;
+			dev->GetTextureStageState (0, D3DTSS_COLOROP,   &oldColorOp);
+			dev->GetTextureStageState (0, D3DTSS_COLORARG1, &oldColorArg1);
+			dev->GetTextureStageState (0, D3DTSS_COLORARG2, &oldColorArg2);
+			dev->GetTextureStageState (0, D3DTSS_ALPHAOP,   &oldAlphaOp);
+			dev->GetTextureStageState (0, D3DTSS_ALPHAARG1, &oldAlphaArg1);
+
+			DWORD oldMinFilter, oldMagFilter, oldMipFilter;
+			dev->GetTextureStageState (0, D3DTSS_MINFILTER, &oldMinFilter);
+			dev->GetTextureStageState (0, D3DTSS_MAGFILTER, &oldMagFilter);
+			dev->GetTextureStageState (0, D3DTSS_MIPFILTER, &oldMipFilter);
+
+			IDirect3DBaseTexture8 *oldTex = nullptr;
+			dev->GetTexture (0, &oldTex);
+			DWORD oldVS = 0;
+			dev->GetVertexShader (&oldVS);
+
+			dev->SetRenderState (D3DRS_ALPHABLENDENABLE, TRUE);
+			dev->SetRenderState (D3DRS_SRCBLEND,         D3DBLEND_SRCALPHA);
+			dev->SetRenderState (D3DRS_DESTBLEND,        D3DBLEND_INVSRCALPHA);
+			dev->SetRenderState (D3DRS_ZENABLE,          D3DZB_FALSE);
+			dev->SetRenderState (D3DRS_ZWRITEENABLE,     FALSE);
+			dev->SetRenderState (D3DRS_CULLMODE,         D3DCULL_NONE);
+			dev->SetRenderState (D3DRS_LIGHTING,         FALSE);
+			dev->SetRenderState (D3DRS_FOGENABLE,        FALSE);
+
+			dev->SetTextureStageState (0, D3DTSS_COLOROP,   D3DTOP_MODULATE);
+			dev->SetTextureStageState (0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+			dev->SetTextureStageState (0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+			dev->SetTextureStageState (0, D3DTSS_ALPHAOP,   D3DTOP_SELECTARG1);
+			dev->SetTextureStageState (0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+			dev->SetTextureStageState (0, D3DTSS_MINFILTER, D3DTEXF_POINT);
+			dev->SetTextureStageState (0, D3DTSS_MAGFILTER, D3DTEXF_POINT);
+			dev->SetTextureStageState (0, D3DTSS_MIPFILTER, D3DTEXF_NONE);
+
+			dev->SetTexture (0, tex);
+			dev->SetVertexShader (FVF_TLVERTEX);
+			dev->DrawPrimitiveUP (D3DPT_TRIANGLESTRIP, 2, verts, sizeof (TLVertex));
+
+			dev->SetVertexShader (oldVS);
+			dev->SetTexture (0, oldTex);
+			if (oldTex) oldTex->Release ();
+
+			dev->SetTextureStageState (0, D3DTSS_COLOROP,   oldColorOp);
+			dev->SetTextureStageState (0, D3DTSS_COLORARG1, oldColorArg1);
+			dev->SetTextureStageState (0, D3DTSS_COLORARG2, oldColorArg2);
+			dev->SetTextureStageState (0, D3DTSS_ALPHAOP,   oldAlphaOp);
+			dev->SetTextureStageState (0, D3DTSS_ALPHAARG1, oldAlphaArg1);
+			dev->SetTextureStageState (0, D3DTSS_MINFILTER, oldMinFilter);
+			dev->SetTextureStageState (0, D3DTSS_MAGFILTER, oldMagFilter);
+			dev->SetTextureStageState (0, D3DTSS_MIPFILTER, oldMipFilter);
+
+			dev->SetRenderState (D3DRS_ALPHABLENDENABLE, oldAlphaBlend);
+			dev->SetRenderState (D3DRS_SRCBLEND,         oldSrcBlend);
+			dev->SetRenderState (D3DRS_DESTBLEND,        oldDestBlend);
+			dev->SetRenderState (D3DRS_ZENABLE,          oldZEnable);
+			dev->SetRenderState (D3DRS_ZWRITEENABLE,     oldZWrite);
+			dev->SetRenderState (D3DRS_CULLMODE,         oldCull);
+			dev->SetRenderState (D3DRS_LIGHTING,         oldLighting);
+			dev->SetRenderState (D3DRS_FOGENABLE,        oldFog);
+
+			DX8Wrapper::Invalidate_Cached_Render_States ();
+		}
+		tex->Release ();
+	}
+
+	::SelectObject (memDC, oldBmp);
+	::DeleteObject (dib);
+	::DeleteDC (memDC);
+}
+
+static void Render_SubObj_Name_Overlays (CGraphicView *view, CW3DViewDoc *doc, CameraClass *camera)
+{
+	if (!doc->GetShowSubObjNames ())
+		return;
+
+	RenderObjClass *robj = doc->GetDisplayedObject ();
+	if (robj == nullptr)
+		return;
+
+	int numSubs = robj->Get_Num_Sub_Objects ();
+	if (numSubs <= 0)
+		return;
+
+	NameLabel *labels = new NameLabel[numSubs];
+	int count = 0;
+
+	for (int i = 0; i < numSubs; ++i) {
+		RenderObjClass *sub = robj->Get_Sub_Object (i);
+		if (sub == nullptr)
+			continue;
+		labels[count].name     = sub->Get_Name ();
+		labels[count].worldPos = sub->Get_Transform ().Get_Translation ();
+		++count;
+		sub->Release_Ref ();
+	}
+
+	Render_Name_Labels (view, camera, labels, count, 0xFFFFFF00); // yellow
+	delete[] labels;
+}
+
+static void Render_Bone_Name_Overlays (CGraphicView *view, CW3DViewDoc *doc, CameraClass *camera)
+{
+	if (!doc->GetShowBoneNames ())
+		return;
+
+	RenderObjClass *robj = doc->GetDisplayedObject ();
+	if (robj == nullptr)
+		return;
+
+	int numBones = robj->Get_Num_Bones ();
+	if (numBones <= 0)
+		return;
+
+	NameLabel *labels = new NameLabel[numBones];
+	int count = 0;
+
+	for (int i = 0; i < numBones; ++i) {
+		const char *boneName = robj->Get_Bone_Name (i);
+		if (boneName == nullptr || boneName[0] == '\0')
+			continue;
+		labels[count].name     = boneName;
+		labels[count].worldPos = robj->Get_Bone_Transform (i).Get_Translation ();
+		++count;
+	}
+
+	Render_Name_Labels (view, camera, labels, count, 0xFF00FF00); // green, matches bone diamonds
+	delete[] labels;
+}
+
+
+// TheSuperHackers @feature Tria 18/04/2026 Render bone overlays as green wireframe diamonds
+// with colored XYZ axis lines overlaid on the 3D model.
+struct BoneVertex
+{
+	float x, y, z;
+	DWORD color;
+};
+
+static void Render_Bone_Overlays (CW3DViewDoc *doc)
+{
+	if (doc == nullptr || !doc->GetShowBones ())
+		return;
+
+	RenderObjClass *robj = doc->GetDisplayedObject ();
+	if (robj == nullptr)
+		return;
+
+	int numBones = robj->Get_Num_Bones ();
+	if (numBones <= 0)
+		return;
+
+	// Set up overlay render state: always-on-top, no depth, no texture
+	ShaderClass shader = ShaderClass::_PresetOpaqueSolidShader;
+	shader.Set_Depth_Compare (ShaderClass::PASS_ALWAYS);
+	shader.Set_Depth_Mask (ShaderClass::DEPTH_WRITE_DISABLE);
+	DX8Wrapper::Set_Shader (shader);
+	DX8Wrapper::Set_Texture (0, nullptr);
+
+	VertexMaterialClass *vm = VertexMaterialClass::Get_Preset (VertexMaterialClass::PRELIT_DIFFUSE);
+	DX8Wrapper::Set_Material (vm);
+	REF_PTR_RELEASE (vm);
+
+	Matrix3D identity(true);
+	DX8Wrapper::Set_Transform (D3DTS_WORLD, identity);
+	DX8Wrapper::Apply_Render_State_Changes ();
+
+	IDirect3DDevice8 *dev = DX8Wrapper::_Get_D3D_Device8 ();
+	if (dev == nullptr)
+		return;
+
+	dev->SetVertexShader (D3DFVF_XYZ | D3DFVF_DIFFUSE);
+
+	const DWORD colorGreen = 0xFF00FF00;
+	const DWORD colorRed   = 0xFFFF0000;
+	const DWORD colorBlue  = 0xFF4444FF;
+	const float diamondSize = doc->GetBoneDiamondSize ();
+	const float axisLength  = diamondSize * 3.3f;
+
+	// Max vertices per bone: 24 line endpoints (12 diamond edges) + 6 axis endpoints (3 axes)
+	// = 30 vertices per bone
+	const int kMaxVerts = 30;
+	BoneVertex *verts = new BoneVertex[numBones * kMaxVerts];
+	int vertCount = 0;
+
+	for (int i = 0; i < numBones; i++) {
+		const Matrix3D &tm = robj->Get_Bone_Transform (i);
+		Vector3 pos = tm.Get_Translation ();
+		Vector3 ax = tm.Get_X_Vector ();
+		Vector3 ay = tm.Get_Y_Vector ();
+		Vector3 az = tm.Get_Z_Vector ();
+
+		// Normalize axes for consistent diamond size
+		float lenX = ax.Length ();
+		float lenY = ay.Length ();
+		float lenZ = az.Length ();
+		if (lenX > 0.0001f) ax *= (1.0f / lenX);
+		if (lenY > 0.0001f) ay *= (1.0f / lenY);
+		if (lenZ > 0.0001f) az *= (1.0f / lenZ);
+
+		// Diamond (octahedron) - 6 pole points
+		Vector3 px = pos + ax * diamondSize;
+		Vector3 nx = pos - ax * diamondSize;
+		Vector3 py = pos + ay * diamondSize;
+		Vector3 ny = pos - ay * diamondSize;
+		Vector3 pz = pos + az * diamondSize;
+		Vector3 nz = pos - az * diamondSize;
+
+		// 12 edges of the octahedron as line pairs
+		// Top half (pz to equator)
+		BoneVertex *v = &verts[vertCount];
+		#define BONE_LINE(A, B, C) \
+			v->x = (A).X; v->y = (A).Y; v->z = (A).Z; v->color = (C); v++; \
+			v->x = (B).X; v->y = (B).Y; v->z = (B).Z; v->color = (C); v++;
+
+		BONE_LINE(pz, px, colorGreen);
+		BONE_LINE(pz, py, colorGreen);
+		BONE_LINE(pz, nx, colorGreen);
+		BONE_LINE(pz, ny, colorGreen);
+		// Bottom half (nz to equator)
+		BONE_LINE(nz, px, colorGreen);
+		BONE_LINE(nz, py, colorGreen);
+		BONE_LINE(nz, nx, colorGreen);
+		BONE_LINE(nz, ny, colorGreen);
+		// Equator ring
+		BONE_LINE(px, py, colorGreen);
+		BONE_LINE(py, nx, colorGreen);
+		BONE_LINE(nx, ny, colorGreen);
+		BONE_LINE(ny, px, colorGreen);
+
+		// Axis lines
+		if (doc->GetShowBonePivots ()) {
+			Vector3 axEnd = pos + ax * axisLength;
+			Vector3 ayEnd = pos + ay * axisLength;
+			Vector3 azEnd = pos + az * axisLength;
+			BONE_LINE(pos, axEnd, colorRed);
+			BONE_LINE(pos, ayEnd, colorGreen);
+			BONE_LINE(pos, azEnd, colorBlue);
+		}
+
+		#undef BONE_LINE
+
+		vertCount = (int)(v - verts);
+	}
+
+	if (vertCount > 0) {
+		dev->DrawPrimitiveUP (D3DPT_LINELIST, vertCount / 2, verts, sizeof(BoneVertex));
+	}
+
+	delete[] verts;
+}
+
+
+// TheSuperHackers @feature Tria 23/04/2026 Render a highlight overlay for the currently selected
+// bone or sub-object. Bones get a cyan diamond + axes + label. Sub-objects get a magenta diamond +
+// axes + label showing their pivot position and orientation.
+static void Render_Selected_Item_Overlay (CGraphicView *view, CW3DViewDoc *doc, CameraClass *camera)
+{
+	if (doc == nullptr)
+		return;
+
+	ASSET_TYPE selType = doc->GetSelectedItemType ();
+	if (selType != TypeBone && selType != TypeMesh)
+		return;
+
+	const StringClass &selName = doc->GetSelectedItemName ();
+	if (selName.Is_Empty ())
+		return;
+
+	RenderObjClass *robj = doc->GetDisplayedObject ();
+	if (robj == nullptr)
+		return;
+
+	// Resolve the transform for the selected item
+	Matrix3D tm;
+	bool found = false;
+
+	if (selType == TypeBone) {
+		int boneIdx = robj->Get_Bone_Index (selName);
+		if (boneIdx >= 0) {
+			tm = robj->Get_Bone_Transform (boneIdx);
+			found = true;
+		}
+	} else {
+		// TypeMesh — sub-object pivot.
+		// Sub-object names are stored as short names ("TURRET"), but the render object
+		// stores them as "HIERARCHY.TURRET". Try both.
+		RenderObjClass *sub = robj->Get_Sub_Object_By_Name (selName, nullptr);
+		if (sub == nullptr) {
+			// Try with hierarchy prefix stripped (search by iterating)
+			int numSubs = robj->Get_Num_Sub_Objects ();
+			for (int s = 0; s < numSubs && sub == nullptr; ++s) {
+				RenderObjClass *candidate = robj->Get_Sub_Object (s);
+				if (candidate == nullptr)
+					continue;
+				const char *fullName = candidate->Get_Name ();
+				const char *dot = ::strchr (fullName, '.');
+				const char *shortName = (dot != nullptr) ? dot + 1 : fullName;
+				if (selName == shortName)
+					sub = candidate;
+				else
+					candidate->Release_Ref ();
+			}
+		}
+		if (sub != nullptr) {
+			tm = sub->Get_Transform ();
+			sub->Release_Ref ();
+			found = true;
+		} else {
+			// Fallback: look up as a bone (sub-objects can also be bones)
+			int boneIdx = robj->Get_Bone_Index (selName);
+			if (boneIdx >= 0) {
+				tm = robj->Get_Bone_Transform (boneIdx);
+				found = true;
+			}
+		}
+	}
+
+	if (!found)
+		return;
+
+	Vector3 pos = tm.Get_Translation ();
+	Vector3 ax  = tm.Get_X_Vector ();
+	Vector3 ay  = tm.Get_Y_Vector ();
+	Vector3 az  = tm.Get_Z_Vector ();
+
+	// Normalize axes
+	float lenX = ax.Length (); if (lenX > 0.0001f) ax *= (1.0f / lenX);
+	float lenY = ay.Length (); if (lenY > 0.0001f) ay *= (1.0f / lenY);
+	float lenZ = az.Length (); if (lenZ > 0.0001f) az *= (1.0f / lenZ);
+
+	const float dsize      = doc->GetBoneDiamondSize () * 1.5f; // slightly larger than regular bones
+	const float axisLength = dsize * 3.3f;
+
+	// Selected bone = cyan diamond; selected sub-object = magenta diamond
+	const DWORD colorDiamond = (selType == TypeBone) ? 0xFF00FFFF : 0xFFFF00FF;
+	const DWORD colorRed     = 0xFFFF4444;
+	const DWORD colorGreen2  = 0xFF44FF44;
+	const DWORD colorBlue    = 0xFF4444FF;
+
+	// Diamond pole points
+	Vector3 px = pos + ax * dsize;
+	Vector3 nx = pos - ax * dsize;
+	Vector3 py = pos + ay * dsize;
+	Vector3 ny = pos - ay * dsize;
+	Vector3 pz = pos + az * dsize;
+	Vector3 nz = pos - az * dsize;
+
+	// 12 diamond edges + 3 axis pairs = 30 verts max
+	BoneVertex verts[30];
+	int vc = 0;
+
+	#define SEL_LINE(A, B, C) \
+		verts[vc].x = (A).X; verts[vc].y = (A).Y; verts[vc].z = (A).Z; verts[vc].color = (C); ++vc; \
+		verts[vc].x = (B).X; verts[vc].y = (B).Y; verts[vc].z = (B).Z; verts[vc].color = (C); ++vc;
+
+	SEL_LINE(pz, px, colorDiamond);  SEL_LINE(pz, py, colorDiamond);
+	SEL_LINE(pz, nx, colorDiamond);  SEL_LINE(pz, ny, colorDiamond);
+	SEL_LINE(nz, px, colorDiamond);  SEL_LINE(nz, py, colorDiamond);
+	SEL_LINE(nz, nx, colorDiamond);  SEL_LINE(nz, ny, colorDiamond);
+	SEL_LINE(px, py, colorDiamond);  SEL_LINE(py, nx, colorDiamond);
+	SEL_LINE(nx, ny, colorDiamond);  SEL_LINE(ny, px, colorDiamond);
+
+	// Axis lines — only for sub-objects (bones use diamond only)
+	if (selType == TypeMesh) {
+		SEL_LINE(pos, pos + ax * axisLength, colorRed);
+		SEL_LINE(pos, pos + ay * axisLength, colorGreen2);
+		SEL_LINE(pos, pos + az * axisLength, colorBlue);
+	}
+
+	#undef SEL_LINE
+
+	// Render using the same depth-always shader as bone overlays
+	ShaderClass shader = ShaderClass::_PresetOpaqueSolidShader;
+	shader.Set_Depth_Compare (ShaderClass::PASS_ALWAYS);
+	shader.Set_Depth_Mask (ShaderClass::DEPTH_WRITE_DISABLE);
+	DX8Wrapper::Set_Shader (shader);
+	DX8Wrapper::Set_Texture (0, nullptr);
+
+	VertexMaterialClass *vm = VertexMaterialClass::Get_Preset (VertexMaterialClass::PRELIT_DIFFUSE);
+	DX8Wrapper::Set_Material (vm);
+	REF_PTR_RELEASE (vm);
+
+	Matrix3D identity (true);
+	DX8Wrapper::Set_Transform (D3DTS_WORLD, identity);
+	DX8Wrapper::Apply_Render_State_Changes ();
+
+	IDirect3DDevice8 *dev = DX8Wrapper::_Get_D3D_Device8 ();
+	if (dev != nullptr) {
+		dev->SetVertexShader (D3DFVF_XYZ | D3DFVF_DIFFUSE);
+		dev->DrawPrimitiveUP (D3DPT_LINELIST, vc / 2, verts, sizeof (BoneVertex));
+	}
+
+	// Name label above the pivot — same color as the diamond
+	NameLabel label;
+	label.name     = (const char *)selName;
+	label.worldPos = pos;
+	Render_Name_Labels (view, camera, &label, 1, colorDiamond);
+}
 
 
 /////////////////////////////////////////////////////////////////////////
@@ -73,8 +578,11 @@ CGraphicView::CGraphicView (void)
     : m_bInitialized (FALSE),
       m_pCamera (nullptr),
       m_TimerID (0),
+      m_TimerPeriod (0),
       m_bMouseDown (FALSE),
       m_bRMouseDown (FALSE),
+      m_bMMouseDown (FALSE),
+      m_AltOnMDown (false),
       m_bActive (TRUE),
       m_animationSpeed (1.0F),
       m_dwLastFrameUpdate (0),
@@ -108,6 +616,29 @@ CGraphicView::~CGraphicView ()
 }
 
 
+// Walk all mesh subobjects and sum vertex counts.
+static int Count_Render_Obj_Vertices (RenderObjClass *obj)
+{
+	if (!obj) return 0;
+	int total = 0;
+	int n = obj->Get_Num_Sub_Objects ();
+	for (int i = 0; i < n; i++)
+	{
+		RenderObjClass *sub = obj->Get_Sub_Object (i);
+		if (sub)
+		{
+			if (sub->Class_ID () == RenderObjClass::CLASSID_MESH)
+			{
+				MeshModelClass *model = static_cast<MeshClass *>(sub)->Peek_Model ();
+				if (model) total += model->Get_Vertex_Count ();
+			}
+			sub->Release_Ref ();
+		}
+	}
+	return total;
+}
+
+
 BEGIN_MESSAGE_MAP(CGraphicView, CView)
 	//{{AFX_MSG_MAP(CGraphicView)
 	ON_WM_CREATE()
@@ -118,6 +649,9 @@ BEGIN_MESSAGE_MAP(CGraphicView, CView)
 	ON_WM_MOUSEMOVE()
 	ON_WM_RBUTTONUP()
 	ON_WM_RBUTTONDOWN()
+	ON_WM_MBUTTONDOWN()
+	ON_WM_MBUTTONUP()
+	ON_WM_MOUSEWHEEL()
 	ON_WM_GETMINMAXINFO()
 	//}}AFX_MSG_MAP
 END_MESSAGE_MAP()
@@ -237,9 +771,12 @@ CGraphicView::InitializeGraphicView (void)
 		  WWAudioClass::Get_Instance ()->Get_Sound_Scene ()->Attach_Listener_To_Obj (m_pCamera);
     }
 
-	Reset_FOV ();
+	// TheSuperHackers @bugfix Tria 17/04/2026 Only reset FOV and load assets when device is valid.
+	if (bReturn) {
+		Reset_FOV ();
+	}
 
-	 if (m_pLightMesh == nullptr)
+	 if (bReturn && m_pLightMesh == nullptr)
 	 {
 		ResourceFileClass light_mesh_file (nullptr, "Light.w3d");
 		WW3DAssetManager::Get_Instance()->Load_3D_Assets (light_mesh_file);
@@ -257,9 +794,15 @@ CGraphicView::InitializeGraphicView (void)
     {
 		// Kick off a timer that we can use to update
 		// the display (kinda like a game loop iterator)
+		// TheSuperHackers @feature Tria 25/04/2026 Uncap viewport FPS by driving the
+		// render at the system's minimum timer period (typically 1ms) instead of a
+		// 16ms / ~60 FPS floor. timeBeginPeriod ensures the requested resolution is
+		// actually granted by the OS.
 		TIMECAPS caps = { 0 };
 		::timeGetDevCaps (&caps, sizeof (TIMECAPS));
-		UINT freq = max (caps.wPeriodMin, 16U);
+		UINT freq = caps.wPeriodMin > 0 ? caps.wPeriodMin : 1U;
+		::timeBeginPeriod (freq);
+		m_TimerPeriod = freq;
 		m_TimerID = (UINT)::timeSetEvent (freq,
 													 freq,
 													 fnTimerCallback,
@@ -295,6 +838,10 @@ CGraphicView::OnSize
 			cy = g_iHeight;
 		}
 
+		// TheSuperHackers @bugfix Tria 18/04/2026 Prevents crash from setting D3D device to zero dimensions.
+		if (cx < 1 || cy < 1)
+			return;
+
 		// Change the resolution of the rendering device to
 		// match that of the view's current dimensions
 		if (m_iWindowed == 1) {
@@ -304,6 +851,12 @@ CGraphicView::OnSize
 		// Force a repaint of the screen
 		Reset_FOV ();
 		RepaintView ();
+
+		// Keep the clip rect in sync if a drag is in progress.
+		if (m_bMouseDown || m_bRMouseDown || m_bMMouseDown)
+		{
+			Clip_Cursor_To_View ();
+		}
 	}
 
 	return ;
@@ -338,6 +891,10 @@ CGraphicView::OnDestroy (void)
 		// Stop the timer
 		::timeKillEvent ((UINT)m_TimerID);
 		m_TimerID = 0;
+		if (m_TimerPeriod != 0) {
+			::timeEndPeriod (m_TimerPeriod);
+			m_TimerPeriod = 0;
+		}
 	}
 
 	// Cache this information in the registry
@@ -538,6 +1095,9 @@ CGraphicView::RepaintView
 		// Wait for all rendering to complete before stopping benchmark.
 		DWORD milliseconds = (::Get_CPU_Clock (pt_high) - profile_time) / 1000;
 
+		// TheSuperHackers @feature Tria 18/04/2026 Render bone overlays after main scene.
+		Render_Bone_Overlays (doc);
+
 		//
 		// Render the cursor
 		//
@@ -545,6 +1105,14 @@ CGraphicView::RepaintView
 
 		// Render the dazzles
 		doc->Render_Dazzles(m_pCamera);
+
+		// TheSuperHackers @feature Tria 22/04/2026 Blit sub-object name labels onto the back buffer
+		// before Present, so the text is part of the frame and doesn't flicker.
+		Render_SubObj_Name_Overlays (this, doc, m_pCamera);
+		Render_Bone_Name_Overlays (this, doc, m_pCamera);
+
+		// TheSuperHackers @feature Tria 23/04/2026 Highlight selected bone or sub-object in viewport.
+		Render_Selected_Item_Overlay (this, doc, m_pCamera);
 
 		// Finish out the rendering process
 		WW3D::End_Render ();
@@ -562,7 +1130,8 @@ CGraphicView::RepaintView
 			doc->Update_Particle_Count ();
 
 			int polys = (prender_obj != nullptr) ? prender_obj->Get_Num_Polys () : 0;
-			((CMainFrame *)::AfxGetMainWnd ())->UpdatePolygonCount (polys);
+			int verts = Count_Render_Obj_Vertices (prender_obj);
+			((CMainFrame *)::AfxGetMainWnd ())->UpdatePolygonCount (polys, verts, polys);
 		}
 
 		//
@@ -570,6 +1139,12 @@ CGraphicView::RepaintView
 		//
 		((CMainFrame *)::AfxGetMainWnd ())->Update_Frame_Time (milliseconds);
 	}
+
+	// TheSuperHackers @feature W3D Material Viewer: render its preview pane on the
+	// same cadence, outside the main Begin_Render/End_Render bracket (no-op when
+	// closed). While the viewer is open the main render above is paused
+	// (Allow_Update), so this must run even when that block is skipped.
+	CMaterialViewerFrame::RenderActivePreview ();
 
 	_already_painting = false;
 	return ;
@@ -624,6 +1199,16 @@ CGraphicView::WindowProc
     LPARAM lParam
 )
 {
+	// While MMB is captured, swallow Alt syskey/syschar messages so Windows
+	// doesn't activate the menu bar (which would steal focus, beep, and cause
+	// GetKeyState(VK_MENU) to drop mid-drag — breaking Alt+MMB orbit).
+	if (m_bMMouseDown && (message == WM_SYSKEYDOWN || message == WM_SYSKEYUP) && wParam == VK_MENU) {
+		return 0;
+	}
+	if (m_bMMouseDown && message == WM_SYSCHAR) {
+		return 0;
+	}
+
 	// Is this the repaint message we are expecting?
 	if (message == WM_USER+101) {
 
@@ -714,6 +1299,75 @@ fnTimerCallback
 
 ////////////////////////////////////////////////////////////////////////////
 //
+//  Clip_Cursor_To_View
+//
+////////////////////////////////////////////////////////////////////////////
+void
+CGraphicView::Clip_Cursor_To_View (void)
+{
+	RECT rect;
+	GetClientRect (&rect);
+	ClientToScreen (&rect);
+	::ClipCursor (&rect);
+}
+
+
+////////////////////////////////////////////////////////////////////////////
+//
+//  Wrap_Cursor_In_View
+//
+//  When the cursor reaches within EDGE_MARGIN of a viewport edge during an
+//  orbit drag, warp it to the opposite edge so rotation can continue past 360°.
+//  Updates `point` and m_lastPoint so the next OnMouseMove delta isn't a jump.
+//  Returns true if the cursor was wrapped.
+//
+////////////////////////////////////////////////////////////////////////////
+bool
+CGraphicView::Wrap_Cursor_In_View (CPoint &point)
+{
+	const int EDGE_MARGIN = 4;
+
+	RECT rect;
+	GetClientRect (&rect);
+
+	const int w = rect.right  - rect.left;
+	const int h = rect.bottom - rect.top;
+	if (w <= 2 * EDGE_MARGIN || h <= 2 * EDGE_MARGIN) {
+		return false;
+	}
+
+	int newX = point.x;
+	int newY = point.y;
+
+	if (point.x <= rect.left + EDGE_MARGIN) {
+		newX = rect.right - EDGE_MARGIN - 1;
+	} else if (point.x >= rect.right - EDGE_MARGIN - 1) {
+		newX = rect.left + EDGE_MARGIN + 1;
+	}
+
+	if (point.y <= rect.top + EDGE_MARGIN) {
+		newY = rect.bottom - EDGE_MARGIN - 1;
+	} else if (point.y >= rect.bottom - EDGE_MARGIN - 1) {
+		newY = rect.top + EDGE_MARGIN + 1;
+	}
+
+	if (newX == point.x && newY == point.y) {
+		return false;
+	}
+
+	CPoint screen (newX, newY);
+	ClientToScreen (&screen);
+	::SetCursorPos (screen.x, screen.y);
+
+	point.x = newX;
+	point.y = newY;
+	m_lastPoint = point;
+	return true;
+}
+
+
+////////////////////////////////////////////////////////////////////////////
+//
 //  OnLButtonDown
 //
 ////////////////////////////////////////////////////////////////////////////
@@ -726,6 +1380,7 @@ CGraphicView::OnLButtonDown
 {
 	// Capture all mouse messages
 	SetCapture ();
+	Clip_Cursor_To_View ();
 
 	// Mouse button is down
 	m_bMouseDown = TRUE;
@@ -755,14 +1410,14 @@ CGraphicView::OnLButtonUp
     CPoint point
 )
 {
-    if (!m_bRMouseDown)
-    {
-        // Release the mouse capture
-        ReleaseCapture ();
-    }
-
     // Mouse button is up
     m_bMouseDown = FALSE;
+
+    if (!m_bRMouseDown && !m_bMMouseDown)
+    {
+        ::ClipCursor (nullptr);
+        ReleaseCapture ();
+    }
 
     if (m_bRMouseDown == TRUE)
     {
@@ -783,6 +1438,64 @@ CGraphicView::OnLButtonUp
 float minZoomAdjust = 0.0F;
 Vector3 sphereCenter;
 Quaternion rotation;
+
+
+////////////////////////////////////////////////////////////////////////////
+//
+//  Orbit_Camera
+//
+//  3ds Max-style orbit: Euler deltas scaled to viewport size, with pitch around
+//  the camera's local X axis and yaw around the world Z axis, both applied about
+//  the orbit center (sphereCenter). Constant sensitivity, no trackball edge slow-down.
+//
+////////////////////////////////////////////////////////////////////////////
+void
+CGraphicView::Orbit_Camera (int deltaX, int deltaY, CW3DViewDoc *doc)
+{
+	// Scale deltas to viewport size: full width sweep = 360° yaw, full height = 180° pitch.
+	// This keeps sensitivity constant regardless of viewport size and matches Max's feel.
+	RECT rect;
+	GetClientRect (&rect);
+	const float viewW = float(rect.right  > 1 ? rect.right  : 1);
+	const float viewH = float(rect.bottom > 1 ? rect.bottom : 1);
+
+	const float yawRad   = DEG_TO_RADF(  (float)deltaX / viewW * 360.0f );
+	const float pitchRad = DEG_TO_RADF( -(float)deltaY / viewH * 180.0f );
+
+	Matrix3D transform = m_pCamera->Get_Transform ();
+
+	// Move camera-space origin to the orbit center.
+	Matrix3D inverseMatrix;
+	transform.Get_Orthogonal_Inverse (inverseMatrix);
+	Vector3 to_object;
+	inverseMatrix.mulVector3 (sphereCenter, to_object);
+	transform.Translate (to_object);
+
+	// Pitch: Rotate_X is a local (camera-space) post-multiply — correct for tilt up/down.
+	if (m_allowedCameraRotation == FreeRotation || m_allowedCameraRotation == OnlyRotateX)
+	{
+		transform.Rotate_X (pitchRad);
+	}
+
+	// Yaw: Pre_Rotate_Z is a world-space pre-multiply — rotates around world Z without rolling.
+	if (m_allowedCameraRotation == FreeRotation || m_allowedCameraRotation == OnlyRotateY)
+	{
+		transform.Pre_Rotate_Z (yawRad);
+	}
+	else if (m_allowedCameraRotation == OnlyRotateZ)
+	{
+		transform.Rotate_Z (yawRad);
+	}
+
+	transform.Translate (-to_object);
+
+	// Keep the quaternion accumulator in sync so pan still works correctly.
+	rotation = Build_Quaternion (transform);
+
+	m_pCamera->Set_Transform (transform);
+	doc->GetBackObjectCamera ()->Set_Transform (transform);
+	doc->GetBackObjectCamera ()->Set_Position (Vector3 (0.00F, 0.00F, 0.00F));
+}
 
 
 ////////////////////////////////////////////////////////////////////////////
@@ -811,8 +1524,55 @@ CGraphicView::OnMouseMove
 		m_bLightMeshInScene = true;
 	}
 
+	// Middle mouse + Alt: orbit (3ds Max style). Use the Alt state latched at
+	// MMB-down — querying GetKeyState(VK_MENU) here is unreliable because Windows
+	// hands keyboard focus to the menu bar when Alt is pressed, so the modifier
+	// can read as released mid-drag and the branch falls through to pan.
+	if (m_bMMouseDown && m_AltOnMDown)
+	{
+		if (m_bInitialized && doc->GetScene ())
+		{
+			RenderObjClass *pCRenderObj = doc->GetDisplayedObject ();
+			if (pCRenderObj)
+			{
+				Orbit_Camera (iDeltaX, iDeltaY, doc);
+			}
+		}
+
+		m_lastPoint = point;
+		Wrap_Cursor_In_View (point);
+	}
+	// Middle mouse only: pan (3ds Max style)
+	else if (m_bMMouseDown)
+	{
+		Matrix3D transform = m_pCamera->Get_Transform ();
+
+		RECT rect;
+		GetClientRect (&rect);
+
+		float midPointX = float(rect.right >> 1);
+		float midPointY = float(rect.bottom >> 1);
+
+		float lastPointX = ((float)m_lastPoint.x - midPointX) / midPointX;
+		float lastPointY = (midPointY - (float)m_lastPoint.y) / midPointY;
+
+		float pointX = ((float)point.x - midPointX) / midPointX;
+		float pointY = (midPointY - (float)point.y) / midPointY;
+
+		Vector3 cameraPan = Vector3(-1.00F*m_CameraDistance*(pointX - lastPointX), -1.00F*m_CameraDistance*(pointY - lastPointY), 0.00F);
+
+		transform.Translate (cameraPan);
+
+		Matrix3x3 view = Build_Matrix3 (rotation);
+		Vector3 move = view * cameraPan;
+		sphereCenter += move;
+
+		m_pCamera->Set_Transform (transform);
+
+		m_lastPoint = point;
+	}
 	// Is the mouse button down?
-	if (m_bMouseDown && m_bRMouseDown)
+	else if (m_bMouseDown && m_bRMouseDown)
 	{
 		// Get the transformation matrix for the camera and its inverse
 		Matrix3D transform = m_pCamera->Get_Transform ();
@@ -925,112 +1685,18 @@ CGraphicView::OnMouseMove
 	// Is the mouse button down?
 	else if (m_bMouseDown)
 	{
-		// Get the document to display
-		CW3DViewDoc* doc = (CW3DViewDoc *)GetDocument();
-
 		// Are we in a valid state?
 		if (m_bInitialized && doc->GetScene ())
 		{
 			RenderObjClass *pCRenderObj = doc->GetDisplayedObject ();
 			if (pCRenderObj)
 			{
-				RECT rect;
-				GetClientRect (&rect);
-
-				float midPointX = float(rect.right >> 1);
-				float midPointY = float(rect.bottom >> 1);
-
-				float lastPointX = ((float)m_lastPoint.x - midPointX) / midPointX;
-				float lastPointY = (midPointY - (float)m_lastPoint.y) / midPointY;
-
-				float pointX = ((float)point.x - midPointX) / midPointX;
-				float pointY = (midPointY - (float)point.y) / midPointY;
-
-				// Rotate around the object (orbit) using a 0.00F - 1.00F percentage of
-				// the mouse coordinates
-				rotation = ::Trackball (lastPointX, lastPointY, pointX, pointY, 0.8F);
-
-				// Do we want to 'lock-out' all rotation except X?
-				if (m_allowedCameraRotation == OnlyRotateX)
-				{
-#ifdef ALLOW_TEMPORARIES
-					Matrix3D tempMatrix = Build_Matrix3D (rotation);
-#else
-					Matrix3D tempMatrix;
-					Build_Matrix3D (rotation, tempMatrix);
-#endif
-					Matrix3D tempMatrix2 (1);
-
-					tempMatrix2.Rotate_X (tempMatrix.Get_X_Rotation ());
-					tempMatrix2.Set_Translation (tempMatrix.Get_Translation ());
-
-					rotation = Build_Quaternion (tempMatrix2);
-				}
-				// Do we want to 'lock-out' all rotation except Y?
-				else if (m_allowedCameraRotation == OnlyRotateY)
-				{
-#ifdef ALLOW_TEMPORARIES
-					Matrix3D tempMatrix = Build_Matrix3D (rotation);
-#else
-					Matrix3D tempMatrix;
-					Build_Matrix3D (rotation, tempMatrix);
-#endif
-					Matrix3D tempMatrix2 (1);
-
-					tempMatrix2.Rotate_Y (tempMatrix.Get_Y_Rotation ());
-					tempMatrix2.Set_Translation (tempMatrix.Get_Translation ());
-
-					rotation = Build_Quaternion (tempMatrix2);
-				}
-				// Do we want to 'lock-out' all rotation except Z?
-				else if (m_allowedCameraRotation == OnlyRotateZ)
-				{
-#ifdef ALLOW_TEMPORARIES
-					Matrix3D tempMatrix = Build_Matrix3D (rotation);
-#else
-					Matrix3D tempMatrix;
-					Build_Matrix3D (rotation, tempMatrix);
-#endif
-					Matrix3D tempMatrix2 (1);
-
-					tempMatrix2.Rotate_Z (tempMatrix.Get_Z_Rotation ());
-					tempMatrix2.Set_Translation (tempMatrix.Get_Translation ());
-
-					rotation = Build_Quaternion (tempMatrix2);
-				}
-
-				// Get the transformation matrix for the camera and its inverse
-				Matrix3D transform = m_pCamera->Get_Transform ();
-				Matrix3D inverseMatrix;
-				transform.Get_Orthogonal_Inverse (inverseMatrix);
-
-#ifdef ALLOW_TEMPORARIES
-				Vector3 to_object = inverseMatrix * sphereCenter;
-#else
-				Vector3 to_object;
-				inverseMatrix.mulVector3 (sphereCenter, to_object);
-#endif
-
-				transform.Translate (to_object);
-
-#ifdef ALLOW_TEMPORARIES
-				Matrix3D::Multiply (transform, Build_Matrix3D (rotation), &transform);
-#else
-				Matrix3D rotationMatrix;
-				Matrix3D::Multiply (transform, Build_Matrix3D (rotation, rotationMatrix), &transform);
-#endif
-
-				transform.Translate (-to_object);
-
-				// Rotate and translate the camera
-				m_pCamera->Set_Transform (transform);
-
-				doc->GetBackObjectCamera ()->Set_Transform (transform);
-				doc->GetBackObjectCamera ()->Set_Position (Vector3 (0.00F, 0.00F, 0.00F));
+				Orbit_Camera (iDeltaX, iDeltaY, doc);
 			}
 		}
 
 		m_lastPoint = point;
+		Wrap_Cursor_In_View (point);
 	}
 	else if (m_bRMouseDown)
 	{
@@ -1082,7 +1748,7 @@ CGraphicView::OnMouseMove
 					if (prender_obj != nullptr) {
 
 						// Ensure the status bar is updated with the correct poly count
-						pCMainWnd->UpdatePolygonCount (prender_obj->Get_Num_Polys ());
+						pCMainWnd->UpdatePolygonCount (prender_obj->Get_Num_Polys (), Count_Render_Obj_Vertices (prender_obj), prender_obj->Get_Num_Polys ());
 					}
 
 					// Ensure the status bar is updated with the correct camera distance
@@ -1299,7 +1965,7 @@ CGraphicView::Reset_Camera_To_Display_Object (RenderObjClass &render_object)
 	// Update the polygon count in the main window
 	CMainFrame *pCMainWnd = (CMainFrame *)::AfxGetMainWnd ();
 	if (pCMainWnd != nullptr) {
-		pCMainWnd->UpdatePolygonCount (render_object.Get_Num_Polys ());
+		pCMainWnd->UpdatePolygonCount (render_object.Get_Num_Polys (), Count_Render_Obj_Vertices (&render_object), render_object.Get_Num_Polys ());
 	}
 
 	// Load the settings in the default.dat if its in the local directory.
@@ -1363,7 +2029,11 @@ CGraphicView::OnRButtonUp
 	} else {
 		::SetCursor (::LoadCursor (nullptr, MAKEINTRESOURCE (IDC_ARROW)));
 		((CW3DViewDoc *)GetDocument())->Set_Cursor ("cursor.tga");
-		ReleaseCapture ();
+		if (!m_bMMouseDown)
+		{
+			::ClipCursor (nullptr);
+			ReleaseCapture ();
+		}
 	}
 
 	// Allow the base class to process this message
@@ -1385,6 +2055,7 @@ CGraphicView::OnRButtonDown
 {
     // Capture all mouse messages
     SetCapture ();
+    Clip_Cursor_To_View ();
 
     // Mouse button is down
     m_bRMouseDown = TRUE;
@@ -1404,6 +2075,128 @@ CGraphicView::OnRButtonDown
 	// Allow the base class to process this message
     CView::OnRButtonDown(nFlags, point);
     return ;
+}
+
+
+////////////////////////////////////////////////////////////////////////////
+//
+//  OnMButtonDown
+//
+////////////////////////////////////////////////////////////////////////////
+void
+CGraphicView::OnMButtonDown
+(
+    UINT nFlags,
+    CPoint point
+)
+{
+    SetCapture ();
+    Clip_Cursor_To_View ();
+    m_bMMouseDown = TRUE;
+    m_lastPoint = point;
+    m_mButtonDownPoint = point;
+    m_AltOnMDown = (::GetKeyState (VK_MENU) & 0x8000) != 0;
+
+    ::SetCursor (::LoadCursor (::AfxGetResourceHandle (), MAKEINTRESOURCE (IDC_CURSOR_GRAB)));
+    if (m_AltOnMDown) {
+        ((CW3DViewDoc *)GetDocument())->Set_Cursor ("orbit.tga");
+    } else {
+        ((CW3DViewDoc *)GetDocument())->Set_Cursor ("grab.tga");
+    }
+
+    CView::OnMButtonDown (nFlags, point);
+    return ;
+}
+
+
+////////////////////////////////////////////////////////////////////////////
+//
+//  OnMButtonUp
+//
+////////////////////////////////////////////////////////////////////////////
+void
+CGraphicView::OnMButtonUp
+(
+    UINT nFlags,
+    CPoint point
+)
+{
+    m_bMMouseDown = FALSE;
+    m_AltOnMDown = false;
+
+    // If the mouse barely moved with Shift held, treat it as a click and reset the camera
+    int dx = point.x - m_mButtonDownPoint.x;
+    int dy = point.y - m_mButtonDownPoint.y;
+    if ((dx * dx + dy * dy) < 16 && (nFlags & MK_SHIFT))
+    {
+        CW3DViewDoc *doc = (CW3DViewDoc *)GetDocument();
+        RenderObjClass *prender_obj = doc->GetDisplayedObject ();
+        if (prender_obj != nullptr) {
+            Reset_Camera_To_Display_Object (*prender_obj);
+        } else {
+            Reset_Camera_To_Display_Sphere (m_ViewedSphere);
+        }
+    }
+
+    if (!m_bMouseDown && !m_bRMouseDown) {
+        ::SetCursor (::LoadCursor (nullptr, MAKEINTRESOURCE (IDC_ARROW)));
+        ((CW3DViewDoc *)GetDocument())->Set_Cursor ("cursor.tga");
+        ::ClipCursor (nullptr);
+        ReleaseCapture ();
+    }
+
+    CView::OnMButtonUp (nFlags, point);
+    return ;
+}
+
+
+////////////////////////////////////////////////////////////////////////////
+//
+//  OnMouseWheel
+//
+////////////////////////////////////////////////////////////////////////////
+BOOL
+CGraphicView::OnMouseWheel
+(
+    UINT nFlags,
+    short zDelta,
+    CPoint point
+)
+{
+    if (m_bInitialized && m_pCamera != nullptr)
+    {
+        Matrix3D transform = m_pCamera->Get_Transform ();
+
+        // Positive zDelta = scroll up = zoom in (move toward object).
+        float deltay = -(float)zDelta / (float)WHEEL_DELTA * 0.1F;
+        float adjustment = deltay * m_CameraDistance * 3.0F;
+
+        if ((adjustment < minZoomAdjust) && (adjustment >= 0.00F))
+            adjustment = minZoomAdjust;
+        if ((adjustment > -minZoomAdjust) && (adjustment <= 0.00F))
+            adjustment = -minZoomAdjust;
+
+        if ((m_CameraDistance + adjustment) > 0.00F)
+        {
+            m_CameraDistance += adjustment;
+            transform.Translate (Vector3 (0.0F, 0.0F, adjustment));
+            m_pCamera->Set_Transform (transform);
+
+            CW3DViewDoc *doc = (CW3DViewDoc *)GetDocument();
+            doc->GetBackObjectCamera ()->Set_Transform (transform);
+            doc->GetBackObjectCamera ()->Set_Position (Vector3 (0.00F, 0.00F, 0.00F));
+
+            CMainFrame *pCMainWnd = (CMainFrame *)::AfxGetMainWnd ();
+            if (pCMainWnd != nullptr) {
+                RenderObjClass *prender_obj = doc->GetDisplayedObject ();
+                if (prender_obj != nullptr)
+                    pCMainWnd->UpdatePolygonCount (prender_obj->Get_Num_Polys (), Count_Render_Obj_Vertices (prender_obj), prender_obj->Get_Num_Polys ());
+                pCMainWnd->UpdateCameraDistance (m_CameraDistance);
+            }
+        }
+    }
+
+    return CView::OnMouseWheel (nFlags, zDelta, point);
 }
 
 
@@ -1540,7 +2333,7 @@ CGraphicView::SetCameraPos (CAMERA_POS cameraPos)
             RenderObjClass *pCRenderObj = doc->GetDisplayedObject ();
             if (pCRenderObj)
             {
-                pCMainWnd->UpdatePolygonCount (pCRenderObj->Get_Num_Polys ());
+                pCMainWnd->UpdatePolygonCount (pCRenderObj->Get_Num_Polys (), Count_Render_Obj_Vertices (pCRenderObj), pCRenderObj->Get_Num_Polys ());
             }
 
             pCMainWnd->UpdateCameraDistance(m_CameraDistance);

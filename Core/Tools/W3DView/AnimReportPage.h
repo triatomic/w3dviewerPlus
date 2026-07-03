@@ -63,6 +63,7 @@ protected:
 	// Generated message map functions
 	//{{AFX_MSG(CAnimReportPage)
 	virtual BOOL OnInitDialog();
+	afx_msg void OnCopy();
 	//}}AFX_MSG
 	DECLARE_MESSAGE_MAP()
 

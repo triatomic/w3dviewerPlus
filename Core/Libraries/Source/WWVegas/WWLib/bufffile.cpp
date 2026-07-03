@@ -38,7 +38,8 @@
 #include	"bufffile.h"
 #include	"wwdebug.h"
 
-int		BufferedFileClass::_DesiredBufferSize	=	1024*16;
+// TheSuperHackers @performance Tria 18/04/2026 Increase default buffer from 16KB to 64KB for better I/O throughput.
+int		BufferedFileClass::_DesiredBufferSize	=	1024*64;
 
 /***********************************************************************************************
  * BufferedFileClass::BufferedFileClass -- Default constructor for a file object.              *

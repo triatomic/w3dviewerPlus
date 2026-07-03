@@ -328,6 +328,14 @@ public:
 	static void				Invert_Backface_Culling(bool onoff);
 	static bool				Is_Backface_Culling_Inverted();
 
+	// TheSuperHackers @feature xezon 17/04/2026 Global alpha blending override for previewing texture transparency.
+	static void				Force_Alpha_Blending(bool onoff);
+	static bool				Is_Alpha_Blending_Forced();
+
+	// TheSuperHackers @feature Tria 22/04/2026 Global double-sided rendering override for W3DView preview.
+	static void				Force_Double_Sided(bool onoff);
+	static bool				Is_Double_Sided_Forced();
+
 	const StringClass& Get_Description(StringClass& str) const;
 
 	// These are a bunch of predefined shaders for common cases. None of them
@@ -436,6 +444,8 @@ protected:
 
 	static bool ShaderDirty;
 	static unsigned long CurrentShader;
+	static bool _ForceAlphaBlending;
+	static bool _ForceDoubleSided;
 };
 
 inline void ShaderClass::Reset()

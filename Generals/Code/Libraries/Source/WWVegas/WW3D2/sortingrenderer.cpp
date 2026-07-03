@@ -480,7 +480,8 @@ static void Apply_Render_State(RenderStateStruct& render_state)
 	DX8Wrapper::_Set_DX8_Transform(D3DTS_VIEW,render_state.view);
 
 
-	if (!render_state.material->Get_Lighting())
+	// TheSuperHackers @bugfix Maukan 19/04/2026 Guard against null material pointer.
+	if (!render_state.material || !render_state.material->Get_Lighting())
 		return;	//no point changing lights if they are ignored.
   //prevLight = render_state.lightsHash;
 

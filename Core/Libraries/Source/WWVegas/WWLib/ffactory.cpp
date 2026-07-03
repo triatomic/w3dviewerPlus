@@ -129,6 +129,8 @@ void SimpleFileFactoryClass::Set_Sub_Directory( const char * sub_directory )
 
 	CriticalSectionClass::LockClass lock(Mutex);
 	SubDirectory = sub_directory;
+	// TheSuperHackers @performance Tria 18/04/2026 Invalidate path cache when search paths change.
+	PathCache.Remove_All();
 	// END SERIALIZATION
 }
 
@@ -163,6 +165,8 @@ void SimpleFileFactoryClass::Prepend_Sub_Directory( const char * sub_directory )
 
 	CriticalSectionClass::LockClass lock(Mutex);
 	SubDirectory = temp_sub_dir + SubDirectory;
+	// TheSuperHackers @performance Tria 18/04/2026 Invalidate path cache when search paths change.
+	PathCache.Remove_All();
 
 	// END SERIALIZATION
 }
@@ -203,6 +207,8 @@ void SimpleFileFactoryClass::Append_Sub_Directory( const char * sub_directory )
 	}
 
 	SubDirectory += temp_sub_dir;
+	// TheSuperHackers @performance Tria 18/04/2026 Invalidate path cache when search paths change.
+	PathCache.Remove_All();
 	// END SERIALIZATION
 }
 
@@ -267,7 +273,10 @@ FileClass * SimpleFileFactoryClass::Get_File( char const *filename )
 
 		CriticalSectionClass::LockClass lock(Mutex);
 
-		if (!SubDirectory.Is_Empty()) {
+		// TheSuperHackers @performance Tria 18/04/2026 Check path cache before probing filesystem.
+		if (PathCache.Exists(stripped_name)) {
+			new_name = PathCache.Get(stripped_name);
+		} else if (!SubDirectory.Is_Empty()) {
 
 			//
 			// SubDirectory may contain a semicolon separated search path...
@@ -293,6 +302,9 @@ FileClass * SimpleFileFactoryClass::Get_File( char const *filename )
 			} else {
 				new_name.Format("%s%s",SubDirectory.str(),stripped_name.str());
 			}
+
+			// TheSuperHackers @performance Tria 18/04/2026 Cache the resolved path for future lookups.
+			PathCache.Insert(stripped_name, new_name);
 		}
 
 		// END SERIALIZATION
@@ -300,6 +312,13 @@ FileClass * SimpleFileFactoryClass::Get_File( char const *filename )
 
 	file->Set_Name( new_name );	// Call Set_Name to force an allocated name
 	return file;
+}
+
+// TheSuperHackers @performance Tria 18/04/2026 Clear the resolved file path cache.
+void SimpleFileFactoryClass::Clear_Path_Cache()
+{
+	CriticalSectionClass::LockClass lock(Mutex);
+	PathCache.Remove_All();
 }
 
 void SimpleFileFactoryClass::Return_File( FileClass *file )

@@ -49,6 +49,8 @@
 
 bool ShaderClass::ShaderDirty=true;
 unsigned long ShaderClass::CurrentShader=0;
+bool ShaderClass::_ForceAlphaBlending=false;
+bool ShaderClass::_ForceDoubleSided=false;
 unsigned long _PolygonCullMode = D3DCULL_CW;
 
 
@@ -460,6 +462,16 @@ void ShaderClass::Apply()
 			DX8Wrapper::Set_DX8_Render_State(D3DRS_DESTBLEND,df);
 			blendOn = TRUE;
 		}
+
+		// TheSuperHackers @feature xezon 17/04/2026 Force alpha blending for texture transparency preview.
+		if (_ForceAlphaBlending && !blendOn)
+		{
+			DX8Wrapper::Set_DX8_Render_State(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+			DX8Wrapper::Set_DX8_Render_State(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+			blendOn = TRUE;
+			blendAlpha = true;
+		}
+
 		DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHABLENDENABLE,blendOn);
 
 		BOOL alphaTest = FALSE;
@@ -825,7 +837,8 @@ void ShaderClass::Apply()
 //	DX8Wrapper::Set_DX8_Render_State(D3DRS_DITHERENABLE,BOOL(Get_Dither_Mask()));
 
 	// CULLMODE
-	DX8Wrapper::Set_DX8_Render_State(D3DRS_CULLMODE,Get_Cull_Mode() ? _PolygonCullMode : D3DCULL_NONE);
+	// TheSuperHackers @feature Tria 22/04/2026 Force double-sided rendering when enabled.
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_CULLMODE, (_ForceDoubleSided || !Get_Cull_Mode()) ? D3DCULL_NONE : _PolygonCullMode);
 
 	// NPATCHES
 	if (diff&ShaderClass::MASK_NPATCHENABLE) {
@@ -951,6 +964,30 @@ int ShaderClass::Guess_Sort_Level() const
 bool ShaderClass::Is_Backface_Culling_Inverted()
 {
 	return (_PolygonCullMode == D3DCULL_CCW);
+}
+
+// TheSuperHackers @feature xezon 17/04/2026 Global alpha blending override for previewing texture transparency.
+void ShaderClass::Force_Alpha_Blending(bool onoff)
+{
+	_ForceAlphaBlending = onoff;
+	Invalidate();
+}
+
+bool ShaderClass::Is_Alpha_Blending_Forced()
+{
+	return _ForceAlphaBlending;
+}
+
+// TheSuperHackers @feature Tria 22/04/2026 Global double-sided rendering override for W3DView preview.
+void ShaderClass::Force_Double_Sided(bool onoff)
+{
+	_ForceDoubleSided = onoff;
+	Invalidate();
+}
+
+bool ShaderClass::Is_Double_Sided_Forced()
+{
+	return _ForceDoubleSided;
 }
 
 const StringClass& ShaderClass::Get_Description(StringClass& str) const

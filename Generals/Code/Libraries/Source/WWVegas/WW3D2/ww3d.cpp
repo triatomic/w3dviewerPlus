@@ -1352,10 +1352,24 @@ void WW3D::Make_Screen_Shot( const char * filename_base , const float gamma, con
 	// render view clips outside the desktop boundaries. It crashed the game.
 	SurfaceClass* surface = DX8Wrapper::_Get_DX8_Back_Buffer();
 
+	// TheSuperHackers @bugfix Tria 19/04/2026 Guard against null back buffer or null D3D surface.
+	if (surface == nullptr || surface->Peek_D3D_Surface() == nullptr)
+	{
+		REF_PTR_RELEASE(surface);
+		return;
+	}
+
 	SurfaceClass::SurfaceDescription surfaceDesc;
 	surface->Get_Description(surfaceDesc);
 
-	SurfaceClass* surfaceCopy = NEW_REF(SurfaceClass, (DX8Wrapper::_Create_DX8_Surface(surfaceDesc.Width, surfaceDesc.Height, surfaceDesc.Format)));
+	IDirect3DSurface8* d3dCopySurface = DX8Wrapper::_Create_DX8_Surface(surfaceDesc.Width, surfaceDesc.Height, surfaceDesc.Format);
+	if (d3dCopySurface == nullptr)
+	{
+		surface->Release_Ref();
+		return;
+	}
+	SurfaceClass* surfaceCopy = NEW_REF(SurfaceClass, (d3dCopySurface));
+	d3dCopySurface->Release();
 	DX8Wrapper::_Copy_DX8_Rects(surface->Peek_D3D_Surface(), nullptr, 0, surfaceCopy->Peek_D3D_Surface(), nullptr);
 
 	surface->Release_Ref();
@@ -1498,10 +1512,16 @@ void WW3D::Start_Movie_Capture( const char * filename_base, float frame_rate )
 	WWASSERT( !IsCapturing);
 	IsCapturing = true;
 
-	RECT bounds;
-	GetWindowRect(_Hwnd,&bounds);
-	int height=bounds.bottom-bounds.top;
-	int width=bounds.right-bounds.left;
+	// TheSuperHackers @bugfix Tria 19/04/2026 Use the actual render target resolution instead of
+	// measuring the window. The back buffer dimensions may differ from the window client area
+	// (e.g. when maximized or after a device reset), causing size mismatches and crashes.
+	int width = 0;
+	int height = 0;
+	int bits = 0;
+	bool windowed = false;
+	DX8Wrapper::Get_Render_Target_Resolution(width, height, bits, windowed);
+	if (width <= 0 || height <= 0)
+		return;
 	int depth=24;
 
 	WWASSERT( Movie == nullptr);
@@ -1702,10 +1722,25 @@ void WW3D::Update_Movie_Capture()
 	// render view clips outside the desktop boundaries. It crashed the game.
 	SurfaceClass* surface = DX8Wrapper::_Get_DX8_Back_Buffer();
 
+	// TheSuperHackers @bugfix Tria 19/04/2026 Guard against null back buffer which can happen
+	// when the window is maximized or the device is in a lost state.
+	if (surface == nullptr || surface->Peek_D3D_Surface() == nullptr)
+	{
+		REF_PTR_RELEASE(surface);
+		return;
+	}
+
 	SurfaceClass::SurfaceDescription surfaceDesc;
 	surface->Get_Description(surfaceDesc);
 
-	SurfaceClass* surfaceCopy = NEW_REF(SurfaceClass, (DX8Wrapper::_Create_DX8_Surface(surfaceDesc.Width, surfaceDesc.Height, surfaceDesc.Format)));
+	IDirect3DSurface8* d3dCopySurface = DX8Wrapper::_Create_DX8_Surface(surfaceDesc.Width, surfaceDesc.Height, surfaceDesc.Format);
+	if (d3dCopySurface == nullptr)
+	{
+		surface->Release_Ref();
+		return;
+	}
+	SurfaceClass* surfaceCopy = NEW_REF(SurfaceClass, (d3dCopySurface));
+	d3dCopySurface->Release();
 	DX8Wrapper::_Copy_DX8_Rects(surface->Peek_D3D_Surface(), nullptr, 0, surfaceCopy->Peek_D3D_Surface(), nullptr);
 
 	surface->Release_Ref();

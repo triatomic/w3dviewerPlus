@@ -141,13 +141,17 @@ Bitmap2DObjClass::Bitmap2DObjClass
 	// emissive color for the vertex material, or via a vertex emissive color
 	// array) we need to enable the primary gradient in the shader (it is
 	// disabled in the 2D presets), and set an appropriate vertex material.
-	if (colorizable) {
-		shader.Set_Primary_Gradient(ShaderClass::GRADIENT_MODULATE);
+	// TheSuperHackers @bugfix Maukan 19/04/2026 Always set a vertex material so the sorting
+	// renderer does not dereference a null material pointer.
+	{
 		VertexMaterialClass *vertex_material = NEW_REF( VertexMaterialClass, ());
-		vertex_material->Set_Ambient(0.0f, 0.0f, 0.0f);
-		vertex_material->Set_Diffuse(0.0f, 0.0f, 0.0f);
-		vertex_material->Set_Specular(0.0f, 0.0f, 0.0f);
-		vertex_material->Set_Emissive(1.0f, 1.0f, 1.0f);
+		if (colorizable) {
+			shader.Set_Primary_Gradient(ShaderClass::GRADIENT_MODULATE);
+			vertex_material->Set_Ambient(0.0f, 0.0f, 0.0f);
+			vertex_material->Set_Diffuse(0.0f, 0.0f, 0.0f);
+			vertex_material->Set_Specular(0.0f, 0.0f, 0.0f);
+			vertex_material->Set_Emissive(1.0f, 1.0f, 1.0f);
+		}
 		Set_Vertex_Material(vertex_material, true);
 		vertex_material->Release_Ref();
 	}

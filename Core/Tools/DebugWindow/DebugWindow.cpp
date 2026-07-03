@@ -226,3 +226,17 @@ void __declspec(dllexport) AdjustVariableAndPause(const char* variable, const ch
 		pDbg->ForcePause();
 	}
 }
+
+int __declspec(dllexport) GetDebugLogInterval(void)
+{
+	AFX_MANAGE_STATE(AfxGetStaticModuleState( ));
+
+	DebugWindowDialog* pDbg;
+	pDbg = theApp.GetDialogWindow();
+
+	if (!pDbg) {
+		return 1;
+	}
+
+	return pDbg->GetLogInterval();
+}

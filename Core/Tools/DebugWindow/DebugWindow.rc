@@ -1,4 +1,4 @@
-//Microsoft Developer Studio generated resource script.
+// Microsoft Visual C++ generated resource script.
 //
 #include "resource.h"
 
@@ -13,13 +13,11 @@
 #undef APSTUDIO_READONLY_SYMBOLS
 
 /////////////////////////////////////////////////////////////////////////////
-// English (U.S.) resources
+// English (United States) resources
 
 #if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_ENU)
-#ifdef _WIN32
 LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 #pragma code_page(1252)
-#endif //_WIN32
 
 #ifdef APSTUDIO_INVOKED
 /////////////////////////////////////////////////////////////////////////////
@@ -27,18 +25,18 @@ LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 // TEXTINCLUDE
 //
 
-1 TEXTINCLUDE DISCARDABLE 
+1 TEXTINCLUDE 
 BEGIN
     "resource.h\0"
 END
 
-2 TEXTINCLUDE DISCARDABLE 
+2 TEXTINCLUDE 
 BEGIN
     "#include ""afxres.h""\r\n"
     "\0"
 END
 
-3 TEXTINCLUDE DISCARDABLE 
+3 TEXTINCLUDE 
 BEGIN
     "#define _AFX_NO_SPLITTER_RESOURCES\r\n"
     "#define _AFX_NO_OLE_RESOURCES\r\n"
@@ -59,7 +57,6 @@ END
 #endif    // APSTUDIO_INVOKED
 
 
-#ifndef _MAC
 /////////////////////////////////////////////////////////////////////////////
 //
 // Version
@@ -69,7 +66,7 @@ VS_VERSION_INFO VERSIONINFO
  FILEVERSION 1,0,0,1
  PRODUCTVERSION 1,0,0,1
  FILEFLAGSMASK 0x3fL
-#ifdef RTS_DEBUG
+#ifdef _DEBUG
  FILEFLAGS 0x1L
 #else
  FILEFLAGS 0x0L
@@ -82,15 +79,13 @@ BEGIN
     BEGIN
         BLOCK "040904B0"
         BEGIN
-            VALUE "CompanyName", "\0"
-            VALUE "FileDescription", "DebugWindow DLL\0"
-            VALUE "FileVersion", "1, 0, 0, 1\0"
-            VALUE "InternalName", "DebugWindow\0"
-            VALUE "LegalCopyright", "Copyright (C) 2002\0"
-            VALUE "LegalTrademarks", "\0"
-            VALUE "OriginalFilename", "DebugWindow.DLL\0"
-            VALUE "ProductName", "DebugWindow Dynamic Link Library\0"
-            VALUE "ProductVersion", "1, 0, 0, 1\0"
+            VALUE "FileDescription", "DebugWindow DLL"
+            VALUE "FileVersion", "1, 0, 0, 1"
+            VALUE "InternalName", "DebugWindow"
+            VALUE "LegalCopyright", "Copyright (C) 2002"
+            VALUE "OriginalFilename", "DebugWindow.DLL"
+            VALUE "ProductName", "DebugWindow Dynamic Link Library"
+            VALUE "ProductVersion", "1, 0, 0, 1"
         END
     END
     BLOCK "VarFileInfo"
@@ -99,32 +94,37 @@ BEGIN
     END
 END
 
-#endif    // !_MAC
-
 
 /////////////////////////////////////////////////////////////////////////////
 //
 // Dialog
 //
 
-IDD_DebugWindow DIALOG DISCARDABLE  0, 0, 210, 404
-STYLE DS_MODALFRAME | WS_MINIMIZEBOX | WS_POPUP | WS_CAPTION | WS_SYSMENU
+IDD_DebugWindow DIALOGEX 0, 0, 283, 404
+STYLE DS_SETFONT | DS_FIXEDSYS | WS_MINIMIZEBOX | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME
 CAPTION "Dialog"
-FONT 8, "MS Sans Serif"
+FONT 8, "MS Shell Dlg", 0, 0, 0x0
 BEGIN
     DEFPUSHBUTTON   "Step",IDC_Step,81,7,50,14
-    DEFPUSHBUTTON   "Step 10",IDC_StepTen,153,7,50,14
-    EDITTEXT        IDC_Variables,7,43,196,99,ES_MULTILINE | ES_AUTOVSCROLL | 
-                    ES_AUTOHSCROLL | ES_READONLY | WS_VSCROLL
-    EDITTEXT        IDC_Messages,7,154,196,247,ES_MULTILINE | ES_AUTOVSCROLL | 
-                    ES_READONLY | WS_VSCROLL
-    LTEXT           "Variables",IDC_Variables_Text,7,32,30,8
+    DEFPUSHBUTTON   "Step 10",IDC_StepTen,168,6,50,14
+    LTEXT           "Display ms",IDC_DisplayInterval_Text,7,45,38,8
+    EDITTEXT        IDC_DisplayInterval,46,43,28,12,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "Log every N",IDC_LogInterval_Text,90,45,42,8
+    EDITTEXT        IDC_LogInterval,134,43,28,12,ES_AUTOHSCROLL | ES_NUMBER
+    LTEXT           "Transparency",IDC_Transparency_Text,7,60,45,8
+    COMBOBOX        IDC_Transparency,53,58,48,60,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    CONTROL         "Save",IDC_SaveLog,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,182,41,33,10
+    CONTROL         "Pretty",IDC_PrettyLog,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,182,54,40,10
+    CONTROL         "Lossless",IDC_LosslessLog,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,182,65,40,10
+    EDITTEXT        IDC_Variables,7,84,269,58,ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_READONLY | WS_VSCROLL | WS_HSCROLL
+    LTEXT           "Filter",IDC_MessageFilter_Text,7,156,20,8
+    EDITTEXT        IDC_MessageFilter,102,154,174,12,ES_AUTOHSCROLL
+    EDITTEXT        IDC_Messages,7,170,269,231,ES_MULTILINE | ES_AUTOVSCROLL | ES_AUTOHSCROLL | ES_READONLY | WS_VSCROLL | WS_HSCROLL
+    LTEXT           "Variables",IDC_Variables_Text,7,74,30,8
     LTEXT           "Messages",IDC_Messages_Text,7,144,33,8
-    DEFPUSHBUTTON   "Clear",IDC_ClearWindows,153,26,50,14
-    CONTROL         "Run Fast (10 X) ",IDC_RUN_FAST,"Button",BS_AUTOCHECKBOX | 
-                    BS_PUSHLIKE | WS_TABSTOP,81,26,54,14
-    CONTROL         "Pause",IDC_Pause,"Button",BS_AUTOCHECKBOX | BS_PUSHLIKE | 
-                    WS_TABSTOP,7,7,50,14
+    DEFPUSHBUTTON   "Clear",IDC_ClearWindows,168,25,50,14
+    CONTROL         "Run Fast (10 X) ",IDC_RUN_FAST,"Button",BS_AUTOCHECKBOX | BS_PUSHLIKE | WS_TABSTOP,81,26,62,14
+    CONTROL         "Pause",IDC_Pause,"Button",BS_AUTOCHECKBOX | BS_PUSHLIKE | WS_TABSTOP,7,7,50,14
     LTEXT           "0",IDC_FrameNumber,29,22,44,8
     LTEXT           "Frame",IDC_STATIC,7,22,20,8
 END
@@ -136,19 +136,30 @@ END
 //
 
 #ifdef APSTUDIO_INVOKED
-GUIDELINES DESIGNINFO DISCARDABLE 
+GUIDELINES DESIGNINFO
 BEGIN
     IDD_DebugWindow, DIALOG
     BEGIN
         LEFTMARGIN, 7
-        RIGHTMARGIN, 203
+        RIGHTMARGIN, 276
         TOPMARGIN, 7
         BOTTOMMARGIN, 397
     END
 END
 #endif    // APSTUDIO_INVOKED
 
-#endif    // English (U.S.) resources
+
+/////////////////////////////////////////////////////////////////////////////
+//
+// AFX_DIALOG_LAYOUT
+//
+
+IDD_DebugWindow AFX_DIALOG_LAYOUT
+BEGIN
+    0
+END
+
+#endif    // English (United States) resources
 /////////////////////////////////////////////////////////////////////////////
 
 

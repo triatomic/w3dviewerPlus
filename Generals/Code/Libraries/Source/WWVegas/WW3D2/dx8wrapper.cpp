@@ -570,7 +570,7 @@ bool DX8Wrapper::Reset_Device(bool reload_assets)
 	if ((IsInitted) && (D3DDevice != nullptr)) {
 		// Release all non-MANAGED stuff
 		WW3D::_Invalidate_Textures();
-		
+
 		Set_Vertex_Buffer (nullptr);
 		Set_Index_Buffer (nullptr, 0);
 		if (m_pCleanupHook) {
@@ -582,6 +582,24 @@ bool DX8Wrapper::Reset_Device(bool reload_assets)
 
 		memset(Vertex_Shader_Constants,0,sizeof(Vector4)*MAX_VERTEX_SHADER_CONSTANTS);
 		memset(Pixel_Shader_Constants,0,sizeof(Vector4)*MAX_PIXEL_SHADER_CONSTANTS);
+
+		// TheSuperHackers @bugfix Tria 17/04/2026 Validate and apply current MSAA mode to
+		// presentation parameters before resetting the device.
+		if (MultiSampleAntiAliasing > D3DMULTISAMPLE_NONE) {
+			HRESULT hrBack = D3DInterface->CheckDeviceMultiSampleType(
+				CurRenderDevice, D3DDEVTYPE_HAL,
+				_PresentParameters.BackBufferFormat, IsWindowed,
+				MultiSampleAntiAliasing);
+			HRESULT hrDepth = D3DInterface->CheckDeviceMultiSampleType(
+				CurRenderDevice, D3DDEVTYPE_HAL,
+				_PresentParameters.AutoDepthStencilFormat, IsWindowed,
+				MultiSampleAntiAliasing);
+			if (FAILED(hrBack) || FAILED(hrDepth)) {
+				WWDEBUG_SAY(("Requested MSAA Mode Not Supported"));
+				MultiSampleAntiAliasing = D3DMULTISAMPLE_NONE;
+			}
+		}
+		_PresentParameters.MultiSampleType = MultiSampleAntiAliasing;
 
 		HRESULT hr=_Get_D3D_Device8()->TestCooperativeLevel();
 		if (hr != D3DERR_DEVICELOST )
@@ -601,6 +619,11 @@ bool DX8Wrapper::Reset_Device(bool reload_assets)
 		}
 		Invalidate_Cached_Render_States();
 		Set_Default_Global_Render_States();
+
+		// TheSuperHackers @bugfix Tria 17/04/2026 Re-apply texture filter tables after device
+		// reset so that the current filter setting is not lost.
+		TextureFilterClass::_Init_Filters((TextureFilterClass::TextureFilterMode)WW3D::Get_Texture_Filter());
+
 		WWDEBUG_SAY(("Device reset completed"));
 		return true;
 	}
@@ -1190,7 +1213,7 @@ bool DX8Wrapper::Set_Device_Resolution(int width,int height,int bits,int windowe
 		}
 #pragma message("TODO: support changing windowed status and changing the bit depth")
 		WWDEBUG_SAY(("DX8Wrapper::Set_Device_Resolution is resetting the device."));
-		return Reset_Device();
+		return Reset_Device(true);
 	} else {
 		return false;
 	}

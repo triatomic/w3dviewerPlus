@@ -82,17 +82,18 @@ void MissingTexture::_Init()
 			&rect,
 			0));
 
-	unsigned *buffer=(unsigned*)locked_rect.pBits;
-	unsigned char *pixels=(unsigned char *)missing_image_pixels;
-	for (unsigned y=0;y<missing_image_height;y++)
+	// Magenta/black checkerboard — industry-standard missing-texture indicator
+	constexpr unsigned CHECKER_SIZE  = 16;
+	constexpr unsigned COLOR_MAGENTA = 0xFFFE00FE;
+	constexpr unsigned COLOR_BLACK   = 0xFF000000;
+	for (unsigned y = 0; y < missing_image_height; ++y)
 	{
-		for (unsigned x=0; x<missing_image_width; x++)
+		auto* row = reinterpret_cast<unsigned*>(static_cast<unsigned char*>(locked_rect.pBits) + locked_rect.Pitch * y);
+		for (unsigned x = 0; x < missing_image_width; ++x)
 		{
-			//*buffer++=missing_image_palette[*pixels++];
-			*buffer++=0x7FFF00FF;
+			const bool dark = (((x / CHECKER_SIZE) + (y / CHECKER_SIZE)) & 1u) != 0;
+			*row++ = dark ? COLOR_BLACK : COLOR_MAGENTA;
 		}
-		buffer=(unsigned*)locked_rect.pBits;
-		buffer+=locked_rect.Pitch/sizeof(unsigned)*y;
 	}
 
 	DX8_ErrorCode(tex->UnlockRect(0));

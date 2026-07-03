@@ -146,6 +146,15 @@ void TextureBaseClass::Invalidate_Old_Unused_Textures(unsigned invalidation_time
 	TexturesAppliedPerFrame=0;
 
 	unsigned synctime=WW3D::Get_Sync_Time();
+
+	// TheSuperHackers @performance Tria 18/04/2026 Throttle texture invalidation scan to every 500ms
+	// instead of every frame, as iterating all textures each frame is wasteful.
+	static unsigned s_LastInvalidationScanTime = 0;
+	if (synctime - s_LastInvalidationScanTime < 500) {
+		return;
+	}
+	s_LastInvalidationScanTime = synctime;
+
 	HashTemplateIterator<StringClass,TextureClass*> ite(WW3DAssetManager::Get_Instance()->Texture_Hash());
 	// Loop through all the textures in the manager
 
