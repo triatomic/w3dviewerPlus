@@ -182,6 +182,11 @@ protected:
 		  void					Set_Camera_Bone_Pos_X (bool onoff)			{ m_CameraBonePosX = onoff; }
 		  BOOL					Is_Camera_Bone_Pos_X (void) const			{ return m_CameraBonePosX; }
 
+		  // Invert the vertical (pitch) direction of drag-to-orbit. Persisted to
+		  // the MFC profile so the preference survives restarts.
+		  void					Set_Invert_Camera_Y (bool onoff);
+		  bool					Is_Invert_Camera_Y (void) const				{ return m_InvertCameraY; }
+
         //
         // Object rotation methods
         //
@@ -265,6 +270,7 @@ protected:
         OBJECT_ROTATION		m_objectRotation;
 		  OBJECT_ROTATION		m_LightRotation;
         CAMERA_ROTATION		m_allowedCameraRotation;
+        bool					m_InvertCameraY;
 };
 
 /////////////////////////////////////////////////////////////////////////////

@@ -511,9 +511,11 @@ CAboutDlg::OnInitDialog (void)
 		SAFE_DELETE_ARRAY(pblock);
 	}
 
-	// Put the version string into the dialog
+	// Put the version string into the dialog. FILEVERSION packs major.minor in
+	// the MS dword and patch.build in the LS dword.
 	CString version_string;
-	version_string.Format (IDS_VERSION, (version_major >> 16), (version_major & 0xFFFF));
+	version_string.Format (IDS_VERSION,
+		(version_major >> 16), (version_major & 0xFFFF), (version_minor >> 16));
 	SetDlgItemText (IDC_VERSION, version_string);
 	return TRUE;
 }

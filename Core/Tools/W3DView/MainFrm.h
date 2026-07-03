@@ -156,6 +156,8 @@ protected:
 	afx_msg void OnUpdateSaveAggregate(CCmdUI* pCmdUI);
 	afx_msg void OnCameraResetOnLoad();
 	afx_msg void OnUpdateCameraResetOnLoad(CCmdUI* pCmdUI);
+	afx_msg void OnCameraInvertY();
+	afx_msg void OnUpdateCameraInvertY(CCmdUI* pCmdUI);
 	afx_msg void OnObjectRotateYBack();
 	afx_msg void OnObjectRotateZBack();
 	afx_msg void OnLightRotateY();

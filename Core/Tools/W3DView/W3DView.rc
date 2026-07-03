@@ -390,6 +390,8 @@ BEGIN
         MENUITEM "Rotate &X Only",              IDM_CAMERA_ALLOW_ROTATE_X
         MENUITEM "Rotate &Y Only",              IDM_CAMERA_ALLOW_ROTATE_Y
         MENUITEM "Rotate &Z Only",              IDM_CAMERA_ALLOW_ROTATE_Z
+        MENUITEM SEPARATOR
+        MENUITEM "&Invert Movement (Y)",        IDM_CAMERA_INVERT_Y
         MENUITEM "&Copy Screen Size To Clipboard\tCtrl+C",
                                                 IDM_COPY_SCREEN_SIZE
         MENUITEM SEPARATOR
@@ -417,7 +419,7 @@ BEGIN
     END
     POPUP "&Help"
     BEGIN
-        MENUITEM "&About W3DView...",           ID_APP_ABOUT
+        MENUITEM "&About W3DView+...",          ID_APP_ABOUT
     END
 END
 
@@ -580,11 +582,11 @@ END
 
 IDD_ABOUTBOX DIALOG DISCARDABLE  0, 0, 217, 77
 STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
-CAPTION "About W3DView"
+CAPTION "About W3DView+"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON            IDR_MAINFRAME,IDC_STATIC,11,17,20,20
-    LTEXT           "W3DView Version 1.0",IDC_VERSION,40,10,119,8,
+    LTEXT           "W3DView+ Version 6.1.2",IDC_VERSION,40,10,119,8,
                     SS_NOPREFIX
     LTEXT           "Copyright (C) 1998",IDC_STATIC,40,25,119,8
     LTEXT           "Modified by Tria 2026",IDC_STATIC,40,36,119,8
@@ -2230,8 +2232,8 @@ END
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 5,3,2,0
- PRODUCTVERSION 5,3,2,0
+ FILEVERSION 6,1,2,0
+ PRODUCTVERSION 6,1,2,0
  FILEFLAGSMASK 0x3fL
 #ifdef RTS_DEBUG
  FILEFLAGS 0x1L
@@ -2248,15 +2250,15 @@ BEGIN
         BEGIN
             VALUE "Comments", "\0"
             VALUE "CompanyName", "\0"
-            VALUE "FileDescription", "W3DView MFC Application\0"
-            VALUE "FileVersion", "5.3.2\0"
-            VALUE "InternalName", "W3DView\0"
+            VALUE "FileDescription", "W3DView+ MFC Application\0"
+            VALUE "FileVersion", "6.1.2\0"
+            VALUE "InternalName", "W3DView+\0"
             VALUE "LegalCopyright", "Copyright (C) 1998\0"
             VALUE "LegalTrademarks", "\0"
             VALUE "OriginalFilename", "W3DView.EXE\0"
             VALUE "PrivateBuild", "\0"
-            VALUE "ProductName", "W3DView Application\0"
-            VALUE "ProductVersion", "5.3.2\0"
+            VALUE "ProductName", "W3DView+ Application\0"
+            VALUE "ProductVersion", "6.1.2\0"
             VALUE "SpecialBuild", "\0"
         END
     END
@@ -2962,6 +2964,7 @@ BEGIN
     IDM_SAVE_AGGREGATE      "Export Aggregate\nExport Aggregate"
     IDM_CAMERA_RESET_ON_LOAD
                             "Resets the camera's viewing distance on display\nReset on Display"
+    IDM_CAMERA_INVERT_Y     "Invert the vertical direction of camera drag movement\nInvert Movement (Y)"
 END
 
 STRINGTABLE DISCARDABLE
@@ -2975,7 +2978,7 @@ END
 
 STRINGTABLE DISCARDABLE
 BEGIN
-    IDS_VERSION             "W3DView Version %d.%d"
+    IDS_VERSION             "W3DView+ Version %d.%d.%d"
     IDS_UNACCEPTABLE_GLIDE_MSG
                             "System glide drivers are unacceptable for this application.  Please make sure you install the latest glide drivers on this machine before selecting this device."
     IDS_PARTICLE_PANE       "Particles 127127"

@@ -210,6 +210,8 @@ BEGIN_MESSAGE_MAP(CMainFrame, CFrameWnd)
 	ON_UPDATE_COMMAND_UI(IDM_SAVE_AGGREGATE, OnUpdateSaveAggregate)
 	ON_COMMAND(IDM_CAMERA_RESET_ON_LOAD, OnCameraResetOnLoad)
 	ON_UPDATE_COMMAND_UI(IDM_CAMERA_RESET_ON_LOAD, OnUpdateCameraResetOnLoad)
+	ON_COMMAND(IDM_CAMERA_INVERT_Y, OnCameraInvertY)
+	ON_UPDATE_COMMAND_UI(IDM_CAMERA_INVERT_Y, OnUpdateCameraInvertY)
 	ON_COMMAND(IDM_OBJECT_ROTATE_Y_BACK, OnObjectRotateYBack)
 	ON_COMMAND(IDM_OBJECT_ROTATE_Z_BACK, OnObjectRotateZBack)
 	ON_COMMAND(IDM_LIGHT_ROTATE_Y, OnLightRotateY)
@@ -3343,6 +3345,36 @@ CMainFrame::OnUpdateCameraResetOnLoad (CCmdUI *pCmdUI)
 {
 	CW3DViewDoc *pdoc = (CW3DViewDoc *)GetActiveDocument ();
 	pCmdUI->SetCheck (pdoc->Is_Camera_Auto_Reset_On ());
+	return ;
+}
+
+
+////////////////////////////////////////////////////////////////////////////
+//
+//  OnCameraInvertY
+//
+////////////////////////////////////////////////////////////////////////////
+void
+CMainFrame::OnCameraInvertY (void)
+{
+	CGraphicView *pview = (CGraphicView *)m_wndSplitter.GetPane (0, 1);
+	if (pview != nullptr) {
+		pview->Set_Invert_Camera_Y (pview->Is_Invert_Camera_Y () == false);
+	}
+	return ;
+}
+
+
+////////////////////////////////////////////////////////////////////////////
+//
+//  OnUpdateCameraInvertY
+//
+////////////////////////////////////////////////////////////////////////////
+void
+CMainFrame::OnUpdateCameraInvertY (CCmdUI *pCmdUI)
+{
+	CGraphicView *pview = (CGraphicView *)m_wndSplitter.GetPane (0, 1);
+	pCmdUI->SetCheck ((pview != nullptr) && pview->Is_Invert_Camera_Y ());
 	return ;
 }
 

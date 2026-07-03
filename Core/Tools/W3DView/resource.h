@@ -719,13 +719,16 @@
 // TheSuperHackers @feature F5 refreshes the viewport (re-displays the current asset).
 #define IDM_REFRESH_VIEWPORT            32955
 
+// TheSuperHackers @feature Invert vertical (pitch) camera drag direction.
+#define IDM_CAMERA_INVERT_Y             32956
+
 // Next default values for new objects
 //
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_3D_CONTROLS                     1
 #define _APS_NEXT_RESOURCE_VALUE        731
-#define _APS_NEXT_COMMAND_VALUE         32956
+#define _APS_NEXT_COMMAND_VALUE         32957
 #define _APS_NEXT_CONTROL_VALUE         1189
 #define _APS_NEXT_SYMED_VALUE           101
 #endif

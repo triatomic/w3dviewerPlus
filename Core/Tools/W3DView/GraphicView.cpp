@@ -596,12 +596,28 @@ CGraphicView::CGraphicView (void)
 		m_CameraBonePosX (false),
 		m_UpdateCounter (0),
       m_allowedCameraRotation (FreeRotation),
+		m_InvertCameraY (false),
 		m_ObjectCenter (0.0f, 0.0f, 0.0f)
 {
     // Get the windowed mode from the registry
     CString string_windowed = theApp.GetProfileString ("Config", "Windowed", "1");
 	 m_iWindowed = ::atoi ((LPCTSTR)string_windowed);
+
+	 // Restore the persisted "invert vertical camera movement" preference.
+	 m_InvertCameraY = (theApp.GetProfileInt ("Config", "InvertCameraY", 0) != 0);
     return ;
+}
+
+////////////////////////////////////////////////////////////////////////////
+//
+//  Set_Invert_Camera_Y
+//
+////////////////////////////////////////////////////////////////////////////
+void
+CGraphicView::Set_Invert_Camera_Y (bool onoff)
+{
+	m_InvertCameraY = onoff;
+	theApp.WriteProfileInt ("Config", "InvertCameraY", onoff ? 1 : 0);
 }
 
 
@@ -1460,7 +1476,12 @@ CGraphicView::Orbit_Camera (int deltaX, int deltaY, CW3DViewDoc *doc)
 	const float viewH = float(rect.bottom > 1 ? rect.bottom : 1);
 
 	const float yawRad   = DEG_TO_RADF(  (float)deltaX / viewW * 360.0f );
-	const float pitchRad = DEG_TO_RADF( -(float)deltaY / viewH * 180.0f );
+	float pitchRad = DEG_TO_RADF( -(float)deltaY / viewH * 180.0f );
+
+	// Invert Movement (Y): flip the vertical drag-to-orbit direction.
+	if (m_InvertCameraY) {
+		pitchRad = -pitchRad;
+	}
 
 	Matrix3D transform = m_pCamera->Get_Transform ();
 
