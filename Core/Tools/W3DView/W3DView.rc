@@ -205,6 +205,9 @@ BEGIN
         MENUITEM "&New\tCtrl+N",                ID_FILE_NEW
         MENUITEM "&Open...\tCtrl+O",            ID_FILE_OPEN
         MENUITEM "Open &Folder...\tCtrl+Shift+O", ID_FILE_OPEN_FOLDER
+        MENUITEM SEPARATOR
+        MENUITEM "Material &Viewer...",         IDM_MATERIAL_VIEWER
+        MENUITEM SEPARATOR
         MENUITEM "&Munge Sort on Load",         IDM_MUNGE_SORT_ON_LOAD
         MENUITEM "&Enable Gamma Correction",    IDM_ENABLE_GAMMA_CORRECTION
         MENUITEM SEPARATOR
@@ -315,7 +318,6 @@ BEGIN
         MENUITEM "Show Bone Names",             IDM_SHOW_BONE_NAMES
         MENUITEM SEPARATOR
         MENUITEM "&Refresh Viewport\tF5",       IDM_REFRESH_VIEWPORT
-        MENUITEM "Material &Viewer...",         IDM_MATERIAL_VIEWER
     END
     POPUP "&Object"
     BEGIN
