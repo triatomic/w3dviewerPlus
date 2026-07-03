@@ -27,6 +27,7 @@
 
 #include "MaterialPanel.h"
 
+#include <QtCore/QEvent>
 #include <QtCore/QFileInfo>
 #include <QtGui/QClipboard>
 #include <QtGui/QImage>
@@ -77,6 +78,142 @@ bool (*g_SaveCallback)(const MaterialDocument &) = nullptr;
 void (*g_RevertCallback)() = nullptr;
 void (*g_DirtyChangedCallback)(bool) = nullptr;
 void (*g_ResolveTextureCallback)(TextureData &) = nullptr;
+
+//////////////////////////////////////////////////////////////////////////////
+//	Field help -> status strip
+//////////////////////////////////////////////////////////////////////////////
+
+// The one-line help strip at the bottom of the panel. Populated on hover/focus
+// from each control's status tip (set via Set_Help). Long field descriptions
+// read far better here than in a hover tooltip.
+QLabel *g_StatusLabel = nullptr;
+
+void Show_Help(const QString &text)
+{
+	if (g_StatusLabel != nullptr) {
+		g_StatusLabel->setText(text.isEmpty() ? QStringLiteral(" ") : text);
+	}
+}
+
+// Attaches help text to a control. Uses the status-tip slot (so it is not a
+// hover tooltip) and the shared event filter surfaces it in the status strip.
+void Set_Help(QWidget *widget, const QString &text)
+{
+	if (widget != nullptr) {
+		widget->setStatusTip(text);
+	}
+}
+
+// Single filter installed on the panel; on Enter/FocusIn of a descendant it
+// pushes that widget's status tip to the strip, and clears on Leave. No moc:
+// eventFilter is a plain virtual override.
+class HelpEventFilter : public QObject
+{
+public:
+	explicit HelpEventFilter(QObject *parent) : QObject(parent) {}
+
+protected:
+	bool eventFilter(QObject *object, QEvent *event) override
+	{
+		if (event->type() == QEvent::Enter || event->type() == QEvent::FocusIn) {
+			QWidget *widget = qobject_cast<QWidget *>(object);
+			while (widget != nullptr && widget->statusTip().isEmpty()) {
+				widget = widget->parentWidget();
+			}
+			if (widget != nullptr) {
+				Show_Help(widget->statusTip());
+			}
+		}
+		return QObject::eventFilter(object, event);
+	}
+};
+
+//////////////////////////////////////////////////////////////////////////////
+//	Mapper arg-key templates (per mapping type), from the OpenW3D docs
+//////////////////////////////////////////////////////////////////////////////
+
+// Index matches MAPPING_TYPES below. Each entry is the default key=value
+// template inserted into an EMPTY Args box when that mapping type is chosen;
+// an empty string means the mapper reads no args. Keys/defaults follow the
+// per-mapper table documented in docs README (OpenW3D spec).
+const char *const MAPPER_ARG_TEMPLATES[] = {
+	"",																// 0  UV
+	"",																// 1  Environment
+	"",																// 2  Classic Environment
+	"UPerSec=0.0\nVPerSec=0.0\nUScale=1.0\nVScale=1.0",				// 3  Screen
+	"UPerSec=0.0\nVPerSec=0.0\nUScale=1.0\nVScale=1.0",				// 4  Linear Offset
+	"",																// 5  Silhouette (no parser)
+	"UScale=1.0\nVScale=1.0",										// 6  Scale
+	"FPS=1.0\nLog2Width=0\nLast=0",									// 7  Grid
+	"Speed=0.0\nUCenter=0.0\nVCenter=0.0\nUScale=1.0\nVScale=1.0",	// 8  Rotate
+	"UAmp=0.0\nUFreq=0.0\nUPhase=0.0\nVAmp=0.0\nVFreq=0.0\nVPhase=0.0",	// 9  Sine
+	"UStep=0.0\nVStep=0.0\nSPS=0.0",								// 10 Step
+	"UPerSec=0.0\nVPerSec=0.0\nPeriod=0.0",							// 11 ZigZag
+	"",																// 12 WS Classic Env
+	"",																// 13 WS Environment
+	"FPS=1.0\nLog2Width=0\nLast=0",									// 14 Grid Classic Env
+	"FPS=1.0\nLog2Width=0\nLast=0",									// 15 Grid Environment
+	"FPS=1.0\nUPerSec=0.0\nVPerSec=0.0",							// 16 Random
+	"VPerSec=0.0\nVStart=0.0\nUseReflect=false",					// 17 Edge
+	"BumpRotation=0.0\nBumpScale=1.0",								// 18 Bump Env
+	"",																// 19 Grid WS Classic Env (no parser)
+	"",																// 20 Grid WS Env (no parser)
+};
+
+//////////////////////////////////////////////////////////////////////////////
+//	Field help text (source: W3D Hub 3ds Max tools documentation)
+//////////////////////////////////////////////////////////////////////////////
+
+namespace Help
+{
+	const char *const SURFACE_TYPE =
+		"Surface type: used with an INI file to decide which effects (decals, "
+		"emitters, sounds, geometry, animations) occur when something collides "
+		"with this surface.";
+	const char *const STATIC_SORT =
+		"Static Sorting: tells the engine not to sort these polygons; the level "
+		"picks which batch to render them in.";
+	const char *const PASS_COUNT =
+		"Pass count: number of layers (passes) the material uses; each pass has "
+		"its own mapper, textures and colors. Max 4; all materials in a mesh "
+		"must share the same count.";
+
+	const char *const AMBIENT      = "Ambient: the color of the object's shaded portion.";
+	const char *const DIFFUSE      = "Diffuse: the color the object reflects when lit; the object's base color.";
+	const char *const SPECULAR     = "Specular: the color of the specular highlights.";
+	const char *const EMISSIVE     = "Emissive: self-illumination base color, not affected by scene light.";
+	const char *const SPEC_TO_DIFF = "Specular To Diffuse: obsolete.";
+	const char *const OPACITY      = "Opacity: mesh opacity; 1 = fully opaque, 0 = fully transparent.";
+	const char *const TRANSLUCENCY = "Translucency: how much light passes through the material.";
+	const char *const SHININESS    = "Shininess: controls the tightness of the specular highlights.";
+	const char *const MAPPING_TYPE = "Mapping type: how this stage's texture coordinates are generated.";
+	const char *const MAPPER_ARGS  = "Args: mapper-specific key=value arguments (case sensitive) for the selected mapping type.";
+	const char *const UV_CHANNEL   = "UV Channel: which UV channel this stage samples (derived from the args).";
+
+	const char *const BLEND_MODE   = "Blend Mode: how this pass blends against the scene (a preset that sets Src/Dest/Alpha Test).";
+	const char *const SRC_BLEND    = "Custom Src: the source blend factor.";
+	const char *const DEST_BLEND   = "Custom Dest: the destination blend factor.";
+	const char *const WRITE_ZBUF   = "Write Z Buffer: whether this pass writes to the depth buffer.";
+	const char *const ALPHA_TEST   = "Alpha Test: whether alpha testing is enabled for this pass.";
+	const char *const DEPTH_CMP    = "Depth Cmp: how the pixel's depth is compared against the Z buffer to decide whether to draw.";
+	const char *const PRI_GRAD     = "Pri Gradient: what to do with the diffuse lighting.";
+	const char *const SEC_GRAD     = "Sec Gradient: controls the specular lighting.";
+	const char *const DETAIL_CLR   = "Detail Colour: how the stage-1 texture color combines with stage 0.";
+	const char *const DETAIL_ALPHA = "Detail Alpha: how the stage-1 texture alpha combines with stage 0.";
+
+	const char *const TEX_ENABLED  = "Enabled: whether this texture stage uses a bitmap.";
+	const char *const TEX_NAME     = "Texture filename, resolved through the texture search paths.";
+	const char *const TEX_CLAMP_U  = "Clamp U: clamp the map across the U coordinate to reduce seams.";
+	const char *const TEX_CLAMP_V  = "Clamp V: clamp the map across the V coordinate to reduce seams.";
+	const char *const TEX_NO_LOD   = "No LOD: no level-of-detail (mipmaps) for this texture.";
+	const char *const TEX_PUBLISH  = "Publish: mark this a runtime-swappable texture.";
+	const char *const TEX_RESIZE   = "Resize: obsolete.";
+	const char *const TEX_ALPHA    = "Alpha Bitmap: reduce the alpha channel to 1-bit (a compression hint).";
+	const char *const TEX_FRAMES   = "Frames: number of frames for an animated (TGA-sequence) texture.";
+	const char *const TEX_FPS      = "FPS: frame rate for the animated frames.";
+	const char *const TEX_ANIM     = "Anim Mode: playback of the animated frames (Loop / Ping-Pong / Once / Manual).";
+	const char *const TEX_HINT     = "Pass Hint: what the texture is for (Base / Emissive Light Map / Environment Map / Shinyness Map).";
+}
 
 // Tracks the active theme so popups opened from the panel (the swatch color
 // dialog) can request a dark titlebar via DWM.
@@ -446,19 +583,11 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 	VertexMaterialData *material_ptr = &material;
 	ChangeFn dirty = ctx.markDirty;
 
-	std::function<void(int)> mapping_change;
-	if (ctx.edit) {
-		mapping_change = [material_ptr, mask, shift, dirty](int value) {
-			material_ptr->attributes = (material_ptr->attributes & ~mask)
-				| (((uint32_t)value << shift) & mask);
-			if (dirty) dirty();
-		};
-	}
-	form->addRow(QStringLiteral("Type:"), Make_Combo(MAPPING_TYPES, mapping, mapping_change));
-
+	// Build the args editor first so the Type combo can prefill it on change.
 	QPlainTextEdit *args_edit = new QPlainTextEdit(QString::fromStdString(*args));
 	args_edit->setReadOnly(!ctx.edit);
 	args_edit->setFixedHeight(56);
+	Set_Help(args_edit, QString::fromLatin1(Help::MAPPER_ARGS));
 	if (ctx.edit) {
 		std::string *args_ptr = args;
 		QObject::connect(args_edit, &QPlainTextEdit::textChanged, [args_edit, args_ptr, dirty]() {
@@ -466,6 +595,28 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 			if (dirty) dirty();
 		});
 	}
+
+	std::function<void(int)> mapping_change;
+	if (ctx.edit) {
+		mapping_change = [material_ptr, mask, shift, dirty, args_edit](int value) {
+			material_ptr->attributes = (material_ptr->attributes & ~mask)
+				| (((uint32_t)value << shift) & mask);
+			// Prefill the arg-key template for the chosen mapper, but only when
+			// the Args box is empty — never clobber args already in the chunk.
+			if (args_edit->toPlainText().trimmed().isEmpty()
+					&& value >= 0 && value < (int)(sizeof(MAPPER_ARG_TEMPLATES) / sizeof(MAPPER_ARG_TEMPLATES[0]))) {
+				const char *tmpl = MAPPER_ARG_TEMPLATES[value];
+				if (tmpl[0] != '\0') {
+					args_edit->setPlainText(QString::fromLatin1(tmpl));	// fires textChanged -> writeback + dirty
+				}
+			}
+			if (dirty) dirty();
+		};
+	}
+	QComboBox *type_combo = Make_Combo(MAPPING_TYPES, mapping, mapping_change);
+	Set_Help(type_combo, QString::fromLatin1(Help::MAPPING_TYPE));
+	form->addRow(QStringLiteral("Type:"), type_combo);
+
 	QWidget *args_row = new QWidget;
 	QHBoxLayout *args_layout = new QHBoxLayout(args_row);
 	args_layout->setContentsMargins(0, 0, 0, 0);
@@ -477,7 +628,9 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 
 	// UV Channel stays derived (read-only) even in edit mode; it lives inside
 	// the args text, which the user edits directly.
-	form->addRow(QStringLiteral("UV Channel:"), Make_Int_Spin(Parse_UV_Channel(*args), 1, 99));
+	QSpinBox *uv_spin = Make_Int_Spin(Parse_UV_Channel(*args), 1, 99);
+	Set_Help(uv_spin, QString::fromLatin1(Help::UV_CHANNEL));
+	form->addRow(QStringLiteral("UV Channel:"), uv_spin);
 	return group;
 }
 
@@ -509,45 +662,61 @@ QWidget *Build_Vertex_Material_Tab(const EditCtx &ctx, MeshMaterialData &mesh, c
 
 	VertexMaterialData *material_ptr = &material;
 	QFormLayout *form = new QFormLayout;
-	form->addRow(QStringLiteral("Ambient:"), Make_Color_Row(material.ambient,
+	QWidget *ambient_row = Make_Color_Row(material.ambient,
 		mat_ctx.edit ? [material_ptr, dirty](const uint8_t c[3]) {
 			memcpy(material_ptr->ambient, c, 3); if (dirty) dirty();
-		} : std::function<void(const uint8_t[3])>()));
-	form->addRow(QStringLiteral("Diffuse:"), Make_Color_Row(material.diffuse,
+		} : std::function<void(const uint8_t[3])>());
+	Set_Help(ambient_row, QString::fromLatin1(Help::AMBIENT));
+	form->addRow(QStringLiteral("Ambient:"), ambient_row);
+	QWidget *diffuse_row = Make_Color_Row(material.diffuse,
 		mat_ctx.edit ? [material_ptr, dirty](const uint8_t c[3]) {
 			memcpy(material_ptr->diffuse, c, 3); if (dirty) dirty();
-		} : std::function<void(const uint8_t[3])>()));
-	form->addRow(QStringLiteral("Specular:"), Make_Color_Row(material.specular,
+		} : std::function<void(const uint8_t[3])>());
+	Set_Help(diffuse_row, QString::fromLatin1(Help::DIFFUSE));
+	form->addRow(QStringLiteral("Diffuse:"), diffuse_row);
+	QWidget *specular_row = Make_Color_Row(material.specular,
 		mat_ctx.edit ? [material_ptr, dirty](const uint8_t c[3]) {
 			memcpy(material_ptr->specular, c, 3); if (dirty) dirty();
-		} : std::function<void(const uint8_t[3])>()));
-	form->addRow(QStringLiteral("Emissive:"), Make_Color_Row(material.emissive,
+		} : std::function<void(const uint8_t[3])>());
+	Set_Help(specular_row, QString::fromLatin1(Help::SPECULAR));
+	form->addRow(QStringLiteral("Specular:"), specular_row);
+	QWidget *emissive_row = Make_Color_Row(material.emissive,
 		mat_ctx.edit ? [material_ptr, dirty](const uint8_t c[3]) {
 			memcpy(material_ptr->emissive, c, 3); if (dirty) dirty();
-		} : std::function<void(const uint8_t[3])>()));
+		} : std::function<void(const uint8_t[3])>());
+	Set_Help(emissive_row, QString::fromLatin1(Help::EMISSIVE));
+	form->addRow(QStringLiteral("Emissive:"), emissive_row);
 	layout->addLayout(form);
 
-	layout->addWidget(Make_Check("Specular To Diffuse",
+	QCheckBox *spec_to_diff = Make_Check("Specular To Diffuse",
 		(material.attributes & VERTMAT_COPY_SPECULAR_TO_DIFFUSE) != 0,
 		mat_ctx.edit ? [material_ptr, dirty](bool on) {
 			if (on) material_ptr->attributes |= VERTMAT_COPY_SPECULAR_TO_DIFFUSE;
 			else    material_ptr->attributes &= ~VERTMAT_COPY_SPECULAR_TO_DIFFUSE;
 			if (dirty) dirty();
-		} : std::function<void(bool)>()));
+		} : std::function<void(bool)>());
+	Set_Help(spec_to_diff, QString::fromLatin1(Help::SPEC_TO_DIFF));
+	layout->addWidget(spec_to_diff);
 
 	QFormLayout *value_form = new QFormLayout;
-	value_form->addRow(QStringLiteral("Opacity:"), Make_Float_Spin(material.opacity, 0.0, 1.0, 3,
+	QDoubleSpinBox *opacity_spin = Make_Float_Spin(material.opacity, 0.0, 1.0, 3,
 		mat_ctx.edit ? [material_ptr, dirty](double v) {
 			material_ptr->opacity = (float)v; if (dirty) dirty();
-		} : std::function<void(double)>()));
-	value_form->addRow(QStringLiteral("Translucency:"), Make_Float_Spin(material.translucency, 0.0, 1.0, 3,
+		} : std::function<void(double)>());
+	Set_Help(opacity_spin, QString::fromLatin1(Help::OPACITY));
+	value_form->addRow(QStringLiteral("Opacity:"), opacity_spin);
+	QDoubleSpinBox *translucency_spin = Make_Float_Spin(material.translucency, 0.0, 1.0, 3,
 		mat_ctx.edit ? [material_ptr, dirty](double v) {
 			material_ptr->translucency = (float)v; if (dirty) dirty();
-		} : std::function<void(double)>()));
-	value_form->addRow(QStringLiteral("Shininess:"), Make_Float_Spin(material.shininess, 0.0, 1.0, 3,
+		} : std::function<void(double)>());
+	Set_Help(translucency_spin, QString::fromLatin1(Help::TRANSLUCENCY));
+	value_form->addRow(QStringLiteral("Translucency:"), translucency_spin);
+	QDoubleSpinBox *shininess_spin = Make_Float_Spin(material.shininess, 0.0, 1.0, 3,
 		mat_ctx.edit ? [material_ptr, dirty](double v) {
 			material_ptr->shininess = (float)v; if (dirty) dirty();
-		} : std::function<void(double)>()));
+		} : std::function<void(double)>());
+	Set_Help(shininess_spin, QString::fromLatin1(Help::SHININESS));
+	value_form->addRow(QStringLiteral("Shininess:"), shininess_spin);
 	layout->addLayout(value_form);
 
 	layout->addWidget(Build_Stage_Mapping_Group(mat_ctx, material, 0));
@@ -629,38 +798,54 @@ QWidget *Build_Shader_Tab(const EditCtx &ctx, MeshMaterialData &mesh, const Pass
 			shader_ptr->alphaTest = on ? 1 : 0; rederive_preset(); if (dirty) dirty();
 		}) : std::function<void(bool)>());
 
+	Set_Help(refs->preset, QString::fromLatin1(Help::BLEND_MODE));
+	Set_Help(refs->src, QString::fromLatin1(Help::SRC_BLEND));
+	Set_Help(refs->dest, QString::fromLatin1(Help::DEST_BLEND));
+	Set_Help(refs->alpha, QString::fromLatin1(Help::ALPHA_TEST));
 	blend_form->addRow(QStringLiteral("Blend Mode:"), refs->preset);
 	blend_form->addRow(QStringLiteral("Custom Src:"), refs->src);
 	blend_form->addRow(QStringLiteral("Custom Dest:"), refs->dest);
-	blend_form->addRow(QString(), Make_Check("Write Z Buffer", shader.depthMask != 0,
+	QCheckBox *write_z = Make_Check("Write Z Buffer", shader.depthMask != 0,
 		edit ? std::function<void(bool)>([shader_ptr, dirty](bool on) {
 			shader_ptr->depthMask = on ? 1 : 0; if (dirty) dirty();
-		}) : std::function<void(bool)>()));
+		}) : std::function<void(bool)>());
+	Set_Help(write_z, QString::fromLatin1(Help::WRITE_ZBUF));
+	blend_form->addRow(QString(), write_z);
 	blend_form->addRow(QString(), refs->alpha);
 	layout->addWidget(blend_group);
 
 	QGroupBox *advanced_group = new QGroupBox(QStringLiteral("Advanced"));
 	QFormLayout *advanced_form = new QFormLayout(advanced_group);
-	advanced_form->addRow(QStringLiteral("Pri Gradient:"), Make_Combo(PRI_GRADIENT, shader.priGradient,
+	QComboBox *pri_grad = Make_Combo(PRI_GRADIENT, shader.priGradient,
 		edit ? std::function<void(int)>([shader_ptr, dirty](int v) {
 			shader_ptr->priGradient = (uint8_t)v; if (dirty) dirty();
-		}) : std::function<void(int)>()));
-	advanced_form->addRow(QStringLiteral("Sec Gradient:"), Make_Combo(SEC_GRADIENT, shader.secGradient,
+		}) : std::function<void(int)>());
+	Set_Help(pri_grad, QString::fromLatin1(Help::PRI_GRAD));
+	advanced_form->addRow(QStringLiteral("Pri Gradient:"), pri_grad);
+	QComboBox *sec_grad = Make_Combo(SEC_GRADIENT, shader.secGradient,
 		edit ? std::function<void(int)>([shader_ptr, dirty](int v) {
 			shader_ptr->secGradient = (uint8_t)v; if (dirty) dirty();
-		}) : std::function<void(int)>()));
-	advanced_form->addRow(QStringLiteral("Depth Cmp:"), Make_Combo(DEPTH_COMPARE, shader.depthCompare,
+		}) : std::function<void(int)>());
+	Set_Help(sec_grad, QString::fromLatin1(Help::SEC_GRAD));
+	advanced_form->addRow(QStringLiteral("Sec Gradient:"), sec_grad);
+	QComboBox *depth_cmp = Make_Combo(DEPTH_COMPARE, shader.depthCompare,
 		edit ? std::function<void(int)>([shader_ptr, dirty](int v) {
 			shader_ptr->depthCompare = (uint8_t)v; if (dirty) dirty();
-		}) : std::function<void(int)>()));
-	advanced_form->addRow(QStringLiteral("Detail Colour:"), Make_Combo(DETAIL_COLOR, shader.detailColorFunc,
+		}) : std::function<void(int)>());
+	Set_Help(depth_cmp, QString::fromLatin1(Help::DEPTH_CMP));
+	advanced_form->addRow(QStringLiteral("Depth Cmp:"), depth_cmp);
+	QComboBox *detail_clr = Make_Combo(DETAIL_COLOR, shader.detailColorFunc,
 		edit ? std::function<void(int)>([shader_ptr, dirty](int v) {
 			shader_ptr->detailColorFunc = (uint8_t)v; if (dirty) dirty();
-		}) : std::function<void(int)>()));
-	advanced_form->addRow(QStringLiteral("Detail Alpha:"), Make_Combo(DETAIL_ALPHA, shader.detailAlphaFunc,
+		}) : std::function<void(int)>());
+	Set_Help(detail_clr, QString::fromLatin1(Help::DETAIL_CLR));
+	advanced_form->addRow(QStringLiteral("Detail Colour:"), detail_clr);
+	QComboBox *detail_alpha = Make_Combo(DETAIL_ALPHA, shader.detailAlphaFunc,
 		edit ? std::function<void(int)>([shader_ptr, dirty](int v) {
 			shader_ptr->detailAlphaFunc = (uint8_t)v; if (dirty) dirty();
-		}) : std::function<void(int)>()));
+		}) : std::function<void(int)>());
+	Set_Help(detail_alpha, QString::fromLatin1(Help::DETAIL_ALPHA));
+	advanced_form->addRow(QStringLiteral("Detail Alpha:"), detail_alpha);
 	layout->addWidget(advanced_group);
 	layout->addStretch(1);
 	return tab;
@@ -675,7 +860,9 @@ QWidget *Build_Texture_Stage_Group(const EditCtx &ctx, MeshMaterialData &mesh, c
 	bool present = (texture_index >= 0 && texture_index < (int)mesh.textures.size());
 
 	// Enabling/disabling a stage is structural (v1 leaves it read-only).
-	layout->addWidget(Make_Check("Enabled", present));
+	QCheckBox *enabled_check = Make_Check("Enabled", present);
+	Set_Help(enabled_check, QString::fromLatin1(Help::TEX_ENABLED));
+	layout->addWidget(enabled_check);
 
 	static TextureData DEFAULT_TEXTURE;
 	TextureData &texture = present ? mesh.textures[texture_index] : DEFAULT_TEXTURE;
@@ -784,50 +971,59 @@ QWidget *Build_Texture_Stage_Group(const EditCtx &ctx, MeshMaterialData &mesh, c
 	}
 
 	// Toggles a single bit of texture.attributes; marks info present + dirty.
-	auto make_flag = [&](const char *label, uint16_t bit) -> QCheckBox * {
-		return Make_Check(label, (texture.attributes & bit) != 0,
+	auto make_flag = [&](const char *label, uint16_t bit, const char *help) -> QCheckBox * {
+		QCheckBox *check = Make_Check(label, (texture.attributes & bit) != 0,
 			edit ? std::function<void(bool)>([texture_ptr, bit, dirty, touch_info](bool on) {
 				if (on) texture_ptr->attributes |= bit;
 				else    texture_ptr->attributes &= ~bit;
 				touch_info();
 				if (dirty) dirty();
 			}) : std::function<void(bool)>());
+		Set_Help(check, QString::fromLatin1(help));
+		return check;
 	};
 
 	QHBoxLayout *flags_row_1 = new QHBoxLayout;
-	flags_row_1->addWidget(make_flag("Clamp U", TEX_CLAMP_U));
-	flags_row_1->addWidget(make_flag("Clamp V", TEX_CLAMP_V));
-	flags_row_1->addWidget(make_flag("No LOD", TEX_NO_LOD));
+	flags_row_1->addWidget(make_flag("Clamp U", TEX_CLAMP_U, Help::TEX_CLAMP_U));
+	flags_row_1->addWidget(make_flag("Clamp V", TEX_CLAMP_V, Help::TEX_CLAMP_V));
+	flags_row_1->addWidget(make_flag("No LOD", TEX_NO_LOD, Help::TEX_NO_LOD));
 	flags_row_1->addStretch(1);
 	layout->addLayout(flags_row_1);
 
 	QHBoxLayout *flags_row_2 = new QHBoxLayout;
-	flags_row_2->addWidget(make_flag("Publish", TEX_PUBLISH));
-	flags_row_2->addWidget(make_flag("Resize", TEX_RESIZE_OBSOLETE));
-	flags_row_2->addWidget(make_flag("Alpha Bitmap", TEX_ALPHA_BITMAP));
+	flags_row_2->addWidget(make_flag("Publish", TEX_PUBLISH, Help::TEX_PUBLISH));
+	flags_row_2->addWidget(make_flag("Resize", TEX_RESIZE_OBSOLETE, Help::TEX_RESIZE));
+	flags_row_2->addWidget(make_flag("Alpha Bitmap", TEX_ALPHA_BITMAP, Help::TEX_ALPHA));
 	flags_row_2->addStretch(1);
 	layout->addLayout(flags_row_2);
 
 	QFormLayout *form = new QFormLayout;
-	form->addRow(QStringLiteral("Frames:"), Make_Int_Spin((int)texture.frameCount, 0, 999,
+	QSpinBox *frames_spin = Make_Int_Spin((int)texture.frameCount, 0, 999,
 		edit ? std::function<void(int)>([texture_ptr, dirty, touch_info](int v) {
 			texture_ptr->frameCount = (uint32_t)v; touch_info(); if (dirty) dirty();
-		}) : std::function<void(int)>()));
-	form->addRow(QStringLiteral("FPS:"), Make_Float_Spin(texture.frameRate, 0.0, 60.0, 1,
+		}) : std::function<void(int)>());
+	Set_Help(frames_spin, QString::fromLatin1(Help::TEX_FRAMES));
+	form->addRow(QStringLiteral("Frames:"), frames_spin);
+	QDoubleSpinBox *fps_spin = Make_Float_Spin(texture.frameRate, 0.0, 60.0, 1,
 		edit ? std::function<void(double)>([texture_ptr, dirty, touch_info](double v) {
 			texture_ptr->frameRate = (float)v; touch_info(); if (dirty) dirty();
-		}) : std::function<void(double)>()));
-	form->addRow(QStringLiteral("Anim Mode:"), Make_Combo(ANIM_MODES, texture.animType,
+		}) : std::function<void(double)>());
+	Set_Help(fps_spin, QString::fromLatin1(Help::TEX_FPS));
+	form->addRow(QStringLiteral("FPS:"), fps_spin);
+	QComboBox *anim_combo = Make_Combo(ANIM_MODES, texture.animType,
 		edit ? std::function<void(int)>([texture_ptr, dirty, touch_info](int v) {
 			texture_ptr->animType = (uint16_t)v; touch_info(); if (dirty) dirty();
-		}) : std::function<void(int)>()));
-	form->addRow(QStringLiteral("Pass Hint:"),
-		Make_Combo(PASS_HINTS, (texture.attributes & TEX_HINT_MASK) >> TEX_HINT_SHIFT,
-			edit ? std::function<void(int)>([texture_ptr, dirty, touch_info](int v) {
-				texture_ptr->attributes = (texture_ptr->attributes & ~TEX_HINT_MASK)
-					| (uint16_t)(((uint32_t)v << TEX_HINT_SHIFT) & TEX_HINT_MASK);
-				touch_info(); if (dirty) dirty();
-			}) : std::function<void(int)>()));
+		}) : std::function<void(int)>());
+	Set_Help(anim_combo, QString::fromLatin1(Help::TEX_ANIM));
+	form->addRow(QStringLiteral("Anim Mode:"), anim_combo);
+	QComboBox *hint_combo = Make_Combo(PASS_HINTS, (texture.attributes & TEX_HINT_MASK) >> TEX_HINT_SHIFT,
+		edit ? std::function<void(int)>([texture_ptr, dirty, touch_info](int v) {
+			texture_ptr->attributes = (texture_ptr->attributes & ~TEX_HINT_MASK)
+				| (uint16_t)(((uint32_t)v << TEX_HINT_SHIFT) & TEX_HINT_MASK);
+			touch_info(); if (dirty) dirty();
+		}) : std::function<void(int)>());
+	Set_Help(hint_combo, QString::fromLatin1(Help::TEX_HINT));
+	form->addRow(QStringLiteral("Pass Hint:"), hint_combo);
 	layout->addLayout(form);
 
 	if (!present) {
@@ -860,6 +1056,8 @@ public:
 		  m_SaveButton(nullptr),
 		  m_RevertButton(nullptr),
 		  m_Scroll(nullptr),
+		  m_StatusLabel(nullptr),
+		  m_HelpFilter(nullptr),
 		  m_CurrentIndex(-1),
 		  m_EditMode(false),
 		  m_Dirty(false),
@@ -899,6 +1097,22 @@ public:
 		m_Scroll->setWidgetResizable(true);
 		m_Scroll->setFrameShape(QFrame::NoFrame);
 		layout->addWidget(m_Scroll, 1);
+
+		// One-line help strip: field descriptions (from the W3D Hub tools docs)
+		// appear here on hover/focus instead of in hover tooltips, which read
+		// poorly for the longer descriptions.
+		m_StatusLabel = new QLabel(QStringLiteral(" "));
+		m_StatusLabel->setWordWrap(true);
+		m_StatusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+		m_StatusLabel->setFrameShape(QFrame::StyledPanel);
+		m_StatusLabel->setMinimumHeight(30);
+		m_StatusLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+		layout->addWidget(m_StatusLabel);
+		g_StatusLabel = m_StatusLabel;
+
+		// Watch every descendant so hover/focus can surface its help text.
+		m_HelpFilter = new HelpEventFilter(this);
+		QApplication::instance()->installEventFilter(m_HelpFilter);
 
 		// Live controls connect through lambdas; no Q_OBJECT needed.
 		QObject::connect(m_MeshButton, &QPushButton::clicked,
@@ -1105,21 +1319,27 @@ private:
 		// --- Material Surface Type rollup ---
 		QGroupBox *surface_group = new QGroupBox(QStringLiteral("Material Surface Type"));
 		QFormLayout *surface_form = new QFormLayout(surface_group);
-		surface_form->addRow(QStringLiteral("Surface Type:"), Make_Combo(SURFACE_TYPES, (int)mesh.surfaceType,
+		QComboBox *surface_combo = Make_Combo(SURFACE_TYPES, (int)mesh.surfaceType,
 			ctx.edit ? std::function<void(int)>([mesh_ptr, dirty](int v) {
 				mesh_ptr->surfaceType = (uint32_t)v; if (dirty) dirty();
-			}) : std::function<void(int)>()));
-		surface_form->addRow(QString(), Make_Check("Static Sorting Enabled", mesh.sortLevel != 0,
+			}) : std::function<void(int)>());
+		Set_Help(surface_combo, QString::fromLatin1(Help::SURFACE_TYPE));
+		surface_form->addRow(QStringLiteral("Surface Type:"), surface_combo);
+		QCheckBox *static_sort = Make_Check("Static Sorting Enabled", mesh.sortLevel != 0,
 			ctx.edit ? std::function<void(bool)>([mesh_ptr, dirty](bool on) {
 				// Toggle drives sort level: on keeps/repairs a level, off clears it.
 				if (on && mesh_ptr->sortLevel == 0) mesh_ptr->sortLevel = 1;
 				else if (!on) mesh_ptr->sortLevel = 0;
 				if (dirty) dirty();
-			}) : std::function<void(bool)>()));
-		surface_form->addRow(QStringLiteral("Sort Level:"), Make_Int_Spin(mesh.sortLevel, 0, 32,
+			}) : std::function<void(bool)>());
+		Set_Help(static_sort, QString::fromLatin1(Help::STATIC_SORT));
+		surface_form->addRow(QString(), static_sort);
+		QSpinBox *sort_spin = Make_Int_Spin(mesh.sortLevel, 0, 32,
 			ctx.edit ? std::function<void(int)>([mesh_ptr, dirty](int v) {
 				mesh_ptr->sortLevel = v; if (dirty) dirty();
-			}) : std::function<void(int)>()));
+			}) : std::function<void(int)>());
+		Set_Help(sort_spin, QString::fromLatin1(Help::STATIC_SORT));
+		surface_form->addRow(QStringLiteral("Sort Level:"), sort_spin);
 		if (mesh.prelit) {
 			surface_form->addRow(QString(), new QLabel(m_EditMode
 				? QStringLiteral("(Prelit material — read-only)")
@@ -1131,8 +1351,9 @@ private:
 		QGroupBox *pass_group = new QGroupBox(QStringLiteral("Material Pass Count"));
 		QFormLayout *pass_form = new QFormLayout(pass_group);
 		// Pass count is structural — read-only in v1 even while editing.
-		pass_form->addRow(QStringLiteral("Current Pass Count:"),
-			Make_Int_Spin((int)mesh.passes.size(), 0, 4));
+		QSpinBox *pass_count_spin = Make_Int_Spin((int)mesh.passes.size(), 0, 4);
+		Set_Help(pass_count_spin, QString::fromLatin1(Help::PASS_COUNT));
+		pass_form->addRow(QStringLiteral("Current Pass Count:"), pass_count_spin);
 		layout->addWidget(pass_group);
 
 		if (mesh.passes.empty()) {
@@ -1272,6 +1493,8 @@ private:
 	QPushButton		*m_SaveButton;
 	QPushButton		*m_RevertButton;
 	QScrollArea		*m_Scroll;
+	QLabel			*m_StatusLabel;
+	HelpEventFilter	*m_HelpFilter;
 	MaterialDocument m_Document;
 	int				m_CurrentIndex;
 	bool			m_EditMode;
@@ -1357,6 +1580,7 @@ HWND CreatePanel(HWND parent)
 void DestroyPanel()
 {
 	if (g_Panel != nullptr) {
+		g_StatusLabel = nullptr;	// owned by the panel; cleared before delete
 		delete g_Panel;
 		g_Panel = nullptr;
 	}
