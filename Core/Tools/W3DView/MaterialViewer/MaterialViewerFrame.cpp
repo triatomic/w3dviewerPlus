@@ -362,6 +362,34 @@ CMaterialViewerFrame::NotifyThemeChanged()
 	}
 }
 
+// When keyboard focus is inside the Qt panel, hand keyboard messages straight
+// to the focused window instead of letting the frame translate them. The frame
+// owns an accelerator table (arrows / PgUp / PgDn / Ctrl+combos for the main
+// window) and CFrameWnd also does dialog-style key routing; both would eat the
+// editing keys the Qt text fields and spin boxes need (Delete, Home/End,
+// arrows, Ctrl+A, Backspace, ...), so the user could only append text.
+BOOL
+CMaterialViewerFrame::PreTranslateMessage(MSG *msg)
+{
+	if (msg->message >= WM_KEYFIRST && msg->message <= WM_KEYLAST) {
+#ifdef W3DVIEW_HAS_QT
+		HWND panel = m_PanelWnd;
+		if (panel != nullptr && ::IsWindow(panel)) {
+			HWND focus = ::GetFocus();
+			if (focus != nullptr && (focus == panel || ::IsChild(panel, focus))) {
+				// Dispatch to Qt's wndproc directly; skip the frame's
+				// accelerator / IsDialogMessage handling entirely.
+				::TranslateMessage(msg);
+				::DispatchMessage(msg);
+				return TRUE;
+			}
+		}
+#endif
+	}
+
+	return CFrameWnd::PreTranslateMessage(msg);
+}
+
 int
 CMaterialViewerFrame::OnCreate(LPCREATESTRUCT create_struct)
 {

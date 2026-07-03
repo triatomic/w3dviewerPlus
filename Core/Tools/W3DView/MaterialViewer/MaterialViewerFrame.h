@@ -58,6 +58,11 @@ public:
 protected:
 	virtual void PostNcDestroy();
 
+	// Keyboard input to the Qt panel (text fields, spin boxes) must bypass the
+	// frame's accelerator table and MFC dialog-key handling, or editing keys
+	// (Delete, Home/End, arrows, Ctrl+A, ...) get swallowed before Qt sees them.
+	virtual BOOL PreTranslateMessage(MSG *msg);
+
 	afx_msg int OnCreate(LPCREATESTRUCT create_struct);
 	afx_msg void OnClose();
 	afx_msg void OnDestroy();
