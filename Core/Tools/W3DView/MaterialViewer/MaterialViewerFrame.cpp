@@ -162,6 +162,14 @@ BEGIN_MESSAGE_MAP(CMaterialViewerFrame, CFrameWnd)
 	ON_WM_ERASEBKGND()
 	ON_COMMAND(IDM_MATVIEWER_OPEN, OnFileOpen)
 	ON_COMMAND(IDM_MATVIEWER_CLOSE, OnFileClose)
+	ON_COMMAND(IDM_MATVIEWER_SAVE, OnFileSave)
+	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_SAVE, OnUpdateFileSave)
+	ON_COMMAND(IDM_MATVIEWER_UNDO, OnEditUndo)
+	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_UNDO, OnUpdateEditUndo)
+	ON_COMMAND(IDM_MATVIEWER_REDO, OnEditRedo)
+	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_REDO, OnUpdateEditRedo)
+	ON_COMMAND(IDM_MATVIEWER_REVERT, OnEditRevert)
+	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_REVERT, OnUpdateEditRevert)
 	ON_COMMAND(IDM_MATVIEWER_SHOW_FULL, OnShowFullObject)
 	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_SHOW_FULL, OnUpdateShowFullObject)
 	ON_COMMAND(IDM_TOGGLE_ALPHA, OnToggleAlpha)
@@ -609,6 +617,84 @@ void
 CMaterialViewerFrame::OnFileClose()
 {
 	PostMessage(WM_CLOSE);
+}
+
+////////////////////////////////////////////////////////////////////////////
+//
+//	Edit-mode menu commands (File > Save, Edit > Undo/Redo/Revert). These
+//	mirror the panel's in-window buttons; each item is enabled only when the
+//	corresponding panel action is available.
+//
+void
+CMaterialViewerFrame::OnFileSave()
+{
+#ifdef W3DVIEW_HAS_QT
+	W3dMaterialViewer::RequestPanelSave();
+#endif
+}
+
+void
+CMaterialViewerFrame::OnUpdateFileSave(CCmdUI *cmd_ui)
+{
+#ifdef W3DVIEW_HAS_QT
+	cmd_ui->Enable(W3dMaterialViewer::PanelCanSaveOrRevert());
+#else
+	cmd_ui->Enable(FALSE);
+#endif
+}
+
+void
+CMaterialViewerFrame::OnEditUndo()
+{
+#ifdef W3DVIEW_HAS_QT
+	W3dMaterialViewer::RequestPanelUndo();
+#endif
+}
+
+void
+CMaterialViewerFrame::OnUpdateEditUndo(CCmdUI *cmd_ui)
+{
+#ifdef W3DVIEW_HAS_QT
+	cmd_ui->Enable(W3dMaterialViewer::PanelCanUndo());
+#else
+	cmd_ui->Enable(FALSE);
+#endif
+}
+
+void
+CMaterialViewerFrame::OnEditRedo()
+{
+#ifdef W3DVIEW_HAS_QT
+	W3dMaterialViewer::RequestPanelRedo();
+#endif
+}
+
+void
+CMaterialViewerFrame::OnUpdateEditRedo(CCmdUI *cmd_ui)
+{
+#ifdef W3DVIEW_HAS_QT
+	cmd_ui->Enable(W3dMaterialViewer::PanelCanRedo());
+#else
+	cmd_ui->Enable(FALSE);
+#endif
+}
+
+void
+CMaterialViewerFrame::OnEditRevert()
+{
+#ifdef W3DVIEW_HAS_QT
+	W3dMaterialViewer::RequestPanelRevert();
+#endif
+}
+
+void
+CMaterialViewerFrame::OnUpdateEditRevert(CCmdUI *cmd_ui)
+{
+#ifdef W3DVIEW_HAS_QT
+	cmd_ui->Enable(W3dMaterialViewer::PanelCanSaveOrRevert());
+#else
+	cmd_ui->Enable(FALSE);
+#endif
 }
 
 ////////////////////////////////////////////////////////////////////////////

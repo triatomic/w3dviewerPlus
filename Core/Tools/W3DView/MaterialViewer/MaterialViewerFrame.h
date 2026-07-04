@@ -70,6 +70,14 @@ protected:
 	afx_msg BOOL OnEraseBkgnd(CDC *dc);
 	afx_msg void OnFileOpen();
 	afx_msg void OnFileClose();
+	afx_msg void OnFileSave();
+	afx_msg void OnUpdateFileSave(CCmdUI *cmd_ui);
+	afx_msg void OnEditUndo();
+	afx_msg void OnUpdateEditUndo(CCmdUI *cmd_ui);
+	afx_msg void OnEditRedo();
+	afx_msg void OnUpdateEditRedo(CCmdUI *cmd_ui);
+	afx_msg void OnEditRevert();
+	afx_msg void OnUpdateEditRevert(CCmdUI *cmd_ui);
 	afx_msg void OnShowFullObject();
 	afx_msg void OnUpdateShowFullObject(CCmdUI *cmd_ui);
 	afx_msg void OnToggleAlpha();

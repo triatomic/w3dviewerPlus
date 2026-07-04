@@ -97,6 +97,23 @@ bool PanelHasUnsavedChanges();
 // Returns true if the document was clean or the save succeeded.
 bool RequestPanelSave();
 
+//////////////////////////////////////////////////////////////////////////////
+//	Edit-mode menu bridge
+//
+// Let the host frame mirror the panel's Undo / Redo / Revert / Save actions on
+// its menu bar. The Can* queries drive ON_UPDATE_COMMAND_UI enable state; the
+// Request* calls perform the action (as if the matching panel button was
+// clicked). All are no-ops / return false when not in edit mode.
+
+bool PanelIsEditing();
+bool PanelCanUndo();
+bool PanelCanRedo();
+bool PanelCanSaveOrRevert();	// true when editing and dirty
+
+void RequestPanelUndo();
+void RequestPanelRedo();
+void RequestPanelRevert();
+
 // Invoked (synchronously, on the UI thread) whenever the panel's mesh combo
 // selection changes; receives the mesh name. Pass null to clear.
 void SetPanelMeshSelectedCallback(void (*callback)(const char *meshName));

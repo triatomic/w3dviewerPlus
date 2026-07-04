@@ -22,6 +22,8 @@
 
 #pragma once
 
+#include <string>
+
 #include "vector3.h"
 #include "dx8wrapper.h"
 
@@ -82,6 +84,10 @@ private:
 	CameraClass			*m_Camera;
 	LightClass			*m_Light;
 	RenderObjClass		*m_RenderObj;
+
+	// Name of the currently loaded model. LoadModel re-frames the camera only
+	// when this changes, so a post-save reload of the same model keeps the view.
+	std::string			m_LoadedName;
 
 	// Orbit camera state
 	Vector3				m_Center;

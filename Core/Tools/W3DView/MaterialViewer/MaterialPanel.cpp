@@ -31,9 +31,12 @@
 #include <QtCore/QFileInfo>
 #include <QtGui/QClipboard>
 #include <QtGui/QImage>
+#include <QtGui/QKeySequence>
 #include <QtGui/QMouseEvent>
 #include <QtGui/QPixmap>
+#include <QtWidgets/QAction>
 #include <QtWidgets/QApplication>
+#include <QtWidgets/QButtonGroup>
 #include <QtWidgets/QCheckBox>
 #include <QtWidgets/QColorDialog>
 #include <QtWidgets/QComboBox>
@@ -56,6 +59,8 @@
 #include <QtWidgets/QStyleFactory>
 #include <QtWidgets/QTabWidget>
 #include <QtWidgets/QToolButton>
+#include <QtWidgets/QUndoCommand>
+#include <QtWidgets/QUndoStack>
 #include <QtWidgets/QVBoxLayout>
 
 #include <dwmapi.h>
@@ -566,7 +571,8 @@ struct EditCtx
 {
 	bool				edit = false;
 	MeshMaterialData	*mesh = nullptr;	// mutable when edit; else null
-	ChangeFn			markDirty;			// called on any value change
+	ChangeFn			markDirty;			// commit one undoable edit (discrete controls)
+	ChangeFn			markTyping;			// commit a coalescing edit (text boxes)
 };
 
 QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &material, int stage)
@@ -582,6 +588,7 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 
 	VertexMaterialData *material_ptr = &material;
 	ChangeFn dirty = ctx.markDirty;
+	ChangeFn typing = ctx.markTyping;
 
 	// Build the args editor first so the Type combo can prefill it on change.
 	QPlainTextEdit *args_edit = new QPlainTextEdit(QString::fromStdString(*args));
@@ -590,24 +597,29 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 	Set_Help(args_edit, QString::fromLatin1(Help::MAPPER_ARGS));
 	if (ctx.edit) {
 		std::string *args_ptr = args;
-		QObject::connect(args_edit, &QPlainTextEdit::textChanged, [args_edit, args_ptr, dirty]() {
+		QObject::connect(args_edit, &QPlainTextEdit::textChanged, [args_edit, args_ptr, typing]() {
 			*args_ptr = args_edit->toPlainText().toStdString();
-			if (dirty) dirty();
+			if (typing) typing();	// coalesced: one undo step per typing burst
 		});
 	}
 
 	std::function<void(int)> mapping_change;
 	if (ctx.edit) {
-		mapping_change = [material_ptr, mask, shift, dirty, args_edit](int value) {
+		std::string *args_ptr = args;
+		mapping_change = [material_ptr, mask, shift, dirty, args_edit, args_ptr](int value) {
 			material_ptr->attributes = (material_ptr->attributes & ~mask)
 				| (((uint32_t)value << shift) & mask);
 			// Prefill the arg-key template for the chosen mapper, but only when
 			// the Args box is empty — never clobber args already in the chunk.
+			// Fill with signals blocked so the type change + prefilled args are
+			// one undo step (dirty() below snapshots both at once), not two.
 			if (args_edit->toPlainText().trimmed().isEmpty()
 					&& value >= 0 && value < (int)(sizeof(MAPPER_ARG_TEMPLATES) / sizeof(MAPPER_ARG_TEMPLATES[0]))) {
 				const char *tmpl = MAPPER_ARG_TEMPLATES[value];
 				if (tmpl[0] != '\0') {
-					args_edit->setPlainText(QString::fromLatin1(tmpl));	// fires textChanged -> writeback + dirty
+					QSignalBlocker block(args_edit);
+					args_edit->setPlainText(QString::fromLatin1(tmpl));
+					*args_ptr = args_edit->toPlainText().toStdString();
 				}
 			}
 			if (dirty) dirty();
@@ -870,6 +882,7 @@ QWidget *Build_Texture_Stage_Group(const EditCtx &ctx, MeshMaterialData &mesh, c
 	bool edit = ctx.edit && present;
 	TextureData *texture_ptr = &texture;
 	ChangeFn dirty = ctx.markDirty;
+	ChangeFn typing = ctx.markTyping;
 
 	// Texture info bits require the optional TEXTURE_INFO chunk; setting any of
 	// them marks the texture as having info so the writer materializes it.
@@ -912,7 +925,7 @@ QWidget *Build_Texture_Stage_Group(const EditCtx &ctx, MeshMaterialData &mesh, c
 		// paths. Editing the name re-decodes the thumbnail through the host.
 		QLineEdit *name_edit = new QLineEdit(QString::fromStdString(texture.name));
 		QObject::connect(name_edit, &QLineEdit::textChanged,
-			[texture_ptr, dirty, paint_thumbnail](const QString &t) {
+			[texture_ptr, typing, paint_thumbnail](const QString &t) {
 				texture_ptr->name = t.toStdString();
 				// Re-resolve the preview for the new filename (host decodes it).
 				texture_ptr->resolvedPath.clear();
@@ -923,7 +936,7 @@ QWidget *Build_Texture_Stage_Group(const EditCtx &ctx, MeshMaterialData &mesh, c
 					g_ResolveTextureCallback(*texture_ptr);
 				}
 				paint_thumbnail(*texture_ptr);
-				if (dirty) dirty();
+				if (typing) typing();	// coalesced: one undo step per typing burst
 			});
 		name_row->addWidget(name_edit, 1);
 		name_row->addWidget(Make_Copy_Button(QString::fromStdString(texture.name),
@@ -1044,20 +1057,96 @@ QWidget *Build_Textures_Tab(const EditCtx &ctx, MeshMaterialData &mesh, const Pa
 }
 
 //////////////////////////////////////////////////////////////////////////////
+//	Undo/redo
+//////////////////////////////////////////////////////////////////////////////
+//
+// Every edit mutates one field of one mesh in the panel's document copy. Rather
+// than a bespoke command per field type (colors, floats, bitfields, strings,
+// coupled blend presets, ...), each edit is captured as a whole-mesh before/after
+// snapshot. MeshMaterialData is a small plain-copyable struct, so this is cheap
+// and handles coupled edits (blend preset writing src+dest+alphaTest, the
+// static-sort toggle rewriting sortLevel, texture-info side effects) atomically.
+
+// Implemented by the panel; lets a command write a snapshot back and refresh UI.
+class MeshSnapshotHost
+{
+public:
+	virtual ~MeshSnapshotHost() {}
+	virtual void Apply_Mesh_Snapshot(int meshIndex, const MeshMaterialData &snapshot) = 0;
+};
+
+class MeshEditCommand : public QUndoCommand
+{
+public:
+	MeshEditCommand(MeshSnapshotHost *host, int meshIndex, const QString &label,
+			const MeshMaterialData &before, const MeshMaterialData &after, bool mergeable)
+		: m_Host(host), m_MeshIndex(meshIndex),
+		  m_Before(before), m_After(after), m_Mergeable(mergeable),
+		  m_Pushed(false)
+	{
+		setText(label);
+	}
+
+	void undo() override { m_Host->Apply_Mesh_Snapshot(m_MeshIndex, m_Before); }
+
+	void redo() override
+	{
+		// QUndoStack::push() calls redo() immediately, but the edit that created
+		// this command already mutated the document in place — and it runs inside
+		// the edited widget's own signal handler. Re-applying the snapshot there
+		// rebuilds the panel page (deleting that live widget) and corrupts the
+		// heap. So skip the first redo; only real user-driven redos re-apply.
+		if (!m_Pushed) {
+			m_Pushed = true;
+			return;
+		}
+		m_Host->Apply_Mesh_Snapshot(m_MeshIndex, m_After);
+	}
+
+	// Merge consecutive edits to the same field of the same mesh (e.g. typing
+	// into the texture-name / mapper-args box, or dragging a spin box) into one
+	// undo step. `id()` != -1 enables Qt's automatic merge attempt.
+	int id() const override { return m_Mergeable ? 0x4D455348 /*'MESH'*/ : -1; }
+
+	bool mergeWith(const QUndoCommand *other) override
+	{
+		const MeshEditCommand *cmd = static_cast<const MeshEditCommand *>(other);
+		if (cmd->m_MeshIndex != m_MeshIndex || text() != cmd->text()) {
+			return false;
+		}
+		m_After = cmd->m_After;	// keep the original "before", extend the "after"
+		return true;
+	}
+
+private:
+	MeshSnapshotHost	*m_Host;
+	int					m_MeshIndex;
+	MeshMaterialData	m_Before;
+	MeshMaterialData	m_After;
+	bool				m_Mergeable;
+	bool				m_Pushed;	// false until the initial push-redo is skipped
+};
+
+//////////////////////////////////////////////////////////////////////////////
 //	MaterialPanelWidget
 //////////////////////////////////////////////////////////////////////////////
 
-class MaterialPanelWidget : public QWidget
+class MaterialPanelWidget : public QWidget, public MeshSnapshotHost
 {
 public:
 	MaterialPanelWidget()
 		: m_MeshButton(nullptr),
+		  m_ViewButton(nullptr),
 		  m_EditButton(nullptr),
+		  m_UndoButton(nullptr),
+		  m_RedoButton(nullptr),
 		  m_SaveButton(nullptr),
 		  m_RevertButton(nullptr),
 		  m_Scroll(nullptr),
 		  m_StatusLabel(nullptr),
 		  m_HelpFilter(nullptr),
+		  m_UndoAction(nullptr),
+		  m_RedoAction(nullptr),
 		  m_CurrentIndex(-1),
 		  m_EditMode(false),
 		  m_Dirty(false),
@@ -1073,25 +1162,104 @@ public:
 		m_MeshButton->setToolTip(QStringLiteral("Choose a mesh (filterable list)"));
 		mesh_row->addWidget(m_MeshButton, 1);
 
-		// Dual-state View/Edit gate; Save/Revert appear only while editing.
+		// Segmented View | Edit gate: two glued, mutually exclusive buttons.
+		// Save/Revert appear only while editing.
+		m_ViewButton = new QPushButton(QStringLiteral("View"));
+		m_ViewButton->setCheckable(true);
+		m_ViewButton->setChecked(true);
+		m_ViewButton->setToolTip(QStringLiteral("Read-only View mode"));
 		m_EditButton = new QPushButton(QStringLiteral("Edit"));
 		m_EditButton->setCheckable(true);
-		m_EditButton->setToolTip(QStringLiteral("Toggle read-only View / editable Edit mode"));
-		mesh_row->addWidget(m_EditButton);
+		m_EditButton->setToolTip(QStringLiteral("Editable Edit mode"));
+
+		// Keep the pair exclusive (radio-like) and glue them into one control.
+		QButtonGroup *mode_group = new QButtonGroup(this);
+		mode_group->setExclusive(true);
+		mode_group->addButton(m_ViewButton);
+		mode_group->addButton(m_EditButton);
+
+		m_ViewButton->setObjectName(QStringLiteral("segLeft"));
+		m_EditButton->setObjectName(QStringLiteral("segRight"));
+
+		QHBoxLayout *mode_row = new QHBoxLayout;
+		mode_row->setContentsMargins(0, 0, 0, 0);
+		mode_row->setSpacing(0);
+		mode_row->addWidget(m_ViewButton);
+		mode_row->addWidget(m_EditButton);
+		mesh_row->addLayout(mode_row);
+
+		// Glue the pair into one segmented control: flatten the inner corners
+		// so the seam reads as a single divider, and let the checked segment
+		// stand out. Scoped by objectName so it doesn't touch other buttons.
+		Style_Mode_Segment();
+
+		layout->addLayout(mesh_row);
+
+		// Edit-mode action row beneath the mesh row (only shown while editing)
+		// so it doesn't crowd the View/Edit segment: Undo | Redo ... Save Revert.
+		m_UndoButton = new QPushButton(QStringLiteral("Undo"));
+		m_UndoButton->setToolTip(QStringLiteral("Undo the last material edit (Ctrl+Z)"));
+		m_UndoButton->setVisible(false);
+		m_UndoButton->setEnabled(false);
+
+		m_RedoButton = new QPushButton(QStringLiteral("Redo"));
+		m_RedoButton->setToolTip(QStringLiteral("Redo the next material edit (Ctrl+Shift+Z)"));
+		m_RedoButton->setVisible(false);
+		m_RedoButton->setEnabled(false);
 
 		m_SaveButton = new QPushButton(QStringLiteral("Save"));
 		m_SaveButton->setToolTip(QStringLiteral("Write the edited material back to the .w3d file"));
 		m_SaveButton->setVisible(false);
 		m_SaveButton->setEnabled(false);
-		mesh_row->addWidget(m_SaveButton);
 
 		m_RevertButton = new QPushButton(QStringLiteral("Revert"));
 		m_RevertButton->setToolTip(QStringLiteral("Discard edits and reload the file from disk"));
 		m_RevertButton->setVisible(false);
 		m_RevertButton->setEnabled(false);
-		mesh_row->addWidget(m_RevertButton);
 
-		layout->addLayout(mesh_row);
+		QHBoxLayout *edit_row = new QHBoxLayout;
+		edit_row->setContentsMargins(0, 0, 0, 0);
+		edit_row->addWidget(m_UndoButton);
+		edit_row->addWidget(m_RedoButton);
+		edit_row->addStretch(1);
+		edit_row->addWidget(m_SaveButton);
+		edit_row->addWidget(m_RevertButton);
+		layout->addLayout(edit_row);
+
+		// Undo/redo: buttons drive the stack.
+		QObject::connect(m_UndoButton, &QPushButton::clicked,
+			[this]() { m_UndoStack.undo(); });
+		QObject::connect(m_RedoButton, &QPushButton::clicked,
+			[this]() { m_UndoStack.redo(); });
+		QObject::connect(&m_UndoStack, &QUndoStack::canUndoChanged,
+			[this](bool can) { m_UndoButton->setEnabled(m_EditMode && can); });
+		QObject::connect(&m_UndoStack, &QUndoStack::canRedoChanged,
+			[this](bool can) { m_RedoButton->setEnabled(m_EditMode && can); });
+
+		// Keyboard shortcuts: Ctrl+Z = undo, Ctrl+Shift+Z (and Ctrl+Y) = redo.
+		// Connect straight to the stack rather than createUndo/RedoAction so we
+		// can bind multiple redo chords. WidgetWithChildrenShortcut fires while
+		// focus is anywhere inside the panel (the MFC frame forwards these keys
+		// to Qt via PreTranslateMessage). guard with m_EditMode so View mode is
+		// unaffected.
+		m_UndoAction = new QAction(this);
+		m_UndoAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Z")));
+		m_UndoAction->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+		QObject::connect(m_UndoAction, &QAction::triggered, [this]() {
+			if (m_EditMode && m_UndoStack.canUndo()) m_UndoStack.undo();
+		});
+		addAction(m_UndoAction);
+
+		m_RedoAction = new QAction(this);
+		QList<QKeySequence> redo_keys;
+		redo_keys << QKeySequence(QStringLiteral("Ctrl+Shift+Z"))
+				  << QKeySequence(QStringLiteral("Ctrl+Y"));
+		m_RedoAction->setShortcuts(redo_keys);
+		m_RedoAction->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+		QObject::connect(m_RedoAction, &QAction::triggered, [this]() {
+			if (m_EditMode && m_UndoStack.canRedo()) m_UndoStack.redo();
+		});
+		addAction(m_RedoAction);
 
 		m_Scroll = new QScrollArea;
 		m_Scroll->setWidgetResizable(true);
@@ -1119,6 +1287,8 @@ public:
 			[this]() { Pick_Mesh(); });
 		QObject::connect(m_EditButton, &QPushButton::toggled,
 			[this](bool on) { Toggle_Edit_Mode(on); });
+		// Guard against re-clicking the already-active segment: an exclusive
+		// group swallows the second click (no toggled signal), which is fine.
 		QObject::connect(m_SaveButton, &QPushButton::clicked,
 			[this]() { Do_Save(); });
 		QObject::connect(m_RevertButton, &QPushButton::clicked,
@@ -1130,6 +1300,9 @@ public:
 	void Set_Document(const MaterialDocument &document)
 	{
 		m_Document = document;
+		// A freshly (re)loaded document starts with no edit history.
+		m_UndoStack.clear();
+		m_UndoStack.setClean();
 		Set_Dirty(false);
 
 		if (m_Document.meshes.empty()) {
@@ -1151,6 +1324,16 @@ public:
 		}
 		return Do_Save();
 	}
+
+	// --- Edit-mode menu bridge (see MaterialPanel.h) ---
+	bool Is_Editing() const { return m_EditMode; }
+	bool Can_Undo() const { return m_EditMode && m_UndoStack.canUndo(); }
+	bool Can_Redo() const { return m_EditMode && m_UndoStack.canRedo(); }
+	bool Can_Save_Or_Revert() const { return m_EditMode && m_Dirty; }
+
+	void Menu_Undo() { if (Can_Undo()) m_UndoStack.undo(); }
+	void Menu_Redo() { if (Can_Redo()) m_UndoStack.redo(); }
+	void Menu_Revert() { if (m_EditMode && m_Dirty) Do_Revert(); }
 
 	void Select_Mesh(const char *mesh_name)
 	{
@@ -1203,9 +1386,48 @@ public:
 		// panel — they take the application palette, so set it too or they
 		// come up light in dark mode.
 		QApplication::setPalette(palette);
+
+		// The segment stylesheet uses fixed hex colors, so restyle it against
+		// the new theme.
+		Style_Mode_Segment();
 	}
 
 private:
+	// Paint the View|Edit pair as one segmented control: flatten the seam
+	// corners, share a 1px divider, and highlight the checked half. Uses
+	// palette-driven hex so it reads correctly in light and dark themes.
+	void Style_Mode_Segment()
+	{
+		if (m_ViewButton == nullptr || m_EditButton == nullptr) {
+			return;
+		}
+
+		QColor border = palette().color(QPalette::Mid);
+		QColor face = palette().color(QPalette::Button);
+		QColor text = palette().color(QPalette::ButtonText);
+		QColor sel = palette().color(QPalette::Highlight);
+		QColor selText = palette().color(QPalette::HighlightedText);
+		QColor hover = g_DarkTheme ? face.lighter(130) : face.darker(108);
+
+		QString css = QStringLiteral(
+			"QPushButton#segLeft, QPushButton#segRight {"
+			"  border: 1px solid %1; padding: 3px 12px; color: %2;"
+			"  background: %3; }"
+			"QPushButton#segLeft { border-top-left-radius: 4px;"
+			"  border-bottom-left-radius: 4px; border-right: none; }"
+			"QPushButton#segRight { border-top-right-radius: 4px;"
+			"  border-bottom-right-radius: 4px; }"
+			"QPushButton#segLeft:checked, QPushButton#segRight:checked {"
+			"  background: %4; color: %5; }"
+			"QPushButton#segLeft:hover:!checked, QPushButton#segRight:hover:!checked {"
+			"  background: %6; }")
+			.arg(border.name(), text.name(), face.name(),
+				 sel.name(), selText.name(), hover.name());
+
+		m_ViewButton->setStyleSheet(css);
+		m_EditButton->setStyleSheet(css);
+	}
+
 	void Show_Empty()
 	{
 		QLabel *empty = new QLabel(QStringLiteral("Open a .w3d file to inspect its materials."));
@@ -1302,12 +1524,17 @@ private:
 		// page on a View/Edit toggle must never look like a user edit.
 		m_Building = true;
 
+		// Baseline snapshot for undo: each committed edit is a diff against this,
+		// and it is refreshed to the post-edit state after every push.
+		m_EditBaseline = mesh;
+
 		// Prelit meshes keep several material variants; editing one would desync
 		// them, so they stay read-only even in edit mode (v1).
 		EditCtx ctx;
 		ctx.edit = m_EditMode && !mesh.prelit;
 		ctx.mesh = &mesh;
-		ctx.markDirty = [this]() { Set_Dirty(true); };
+		ctx.markDirty = [this]() { Commit_Edit(false); };	// discrete: one step each
+		ctx.markTyping = [this]() { Commit_Edit(true); };	// text: coalesced burst
 
 		MeshMaterialData *mesh_ptr = &mesh;
 		ChangeFn dirty = ctx.markDirty;
@@ -1410,8 +1637,7 @@ private:
 		if (on) {
 			// Run the host's file-integrity gate before entering edit mode.
 			if (g_EditGateCallback != nullptr && !g_EditGateCallback()) {
-				QSignalBlocker block(m_EditButton);
-				m_EditButton->setChecked(false);
+				Restore_Mode_Buttons(false);	// snap back to View
 				return;
 			}
 			m_EditMode = true;
@@ -1425,8 +1651,7 @@ private:
 				box.setIcon(QMessageBox::Warning);
 				Apply_Dark_Title_Bar((HWND)box.winId());
 				if (box.exec() != QMessageBox::Discard) {
-					QSignalBlocker block(m_EditButton);
-					m_EditButton->setChecked(true);
+					Restore_Mode_Buttons(true);		// stay in Edit
 					return;
 				}
 				// Discard: reload the pristine document from disk.
@@ -1449,6 +1674,7 @@ private:
 			return false;
 		}
 		if (g_SaveCallback(m_Document)) {
+			m_UndoStack.setClean();	// keep history but mark this the saved state
 			Set_Dirty(false);
 			return true;
 		}
@@ -1460,6 +1686,50 @@ private:
 		if (g_RevertCallback != nullptr) {
 			g_RevertCallback();	// re-parses + calls Set_Document (clears dirty)
 		}
+	}
+
+	// Push one undoable edit: diff the live mesh against the baseline snapshot,
+	// record a before/after command, then advance the baseline. `mergeable`
+	// coalesces consecutive same-field edits (text typing) into one step.
+	void Commit_Edit(bool mergeable)
+	{
+		// Signals fired while a page is being (re)built are not user edits.
+		if (m_Building || m_CurrentIndex < 0
+				|| m_CurrentIndex >= (int)m_Document.meshes.size()) {
+			return;
+		}
+
+		const MeshMaterialData &live = m_Document.meshes[m_CurrentIndex];
+		m_UndoStack.push(new MeshEditCommand(this, m_CurrentIndex,
+			QStringLiteral("Edit material"), m_EditBaseline, live, mergeable));
+		m_EditBaseline = live;	// next edit diffs against this state
+		Set_Dirty(true);
+	}
+
+	// MeshSnapshotHost: restore a mesh to `snapshot` (undo/redo) and refresh.
+	void Apply_Mesh_Snapshot(int meshIndex, const MeshMaterialData &snapshot) override
+	{
+		if (meshIndex < 0 || meshIndex >= (int)m_Document.meshes.size()) {
+			return;
+		}
+		m_Document.meshes[meshIndex] = snapshot;
+
+		// Re-resolve texture previews (names may have changed) before redisplay.
+		if (g_ResolveTextureCallback != nullptr) {
+			for (TextureData &tex : m_Document.meshes[meshIndex].textures) {
+				tex.resolvedPath.clear();
+				tex.previewWidth = tex.previewHeight = 0;
+				tex.previewPixels.clear();
+				if (!tex.name.empty()) {
+					g_ResolveTextureCallback(tex);
+				}
+			}
+		}
+
+		// Rebuild the page (also refreshes m_EditBaseline for this mesh) and
+		// reflect the resulting clean/dirty state.
+		Show_Mesh(meshIndex);
+		Set_Dirty(!m_UndoStack.isClean());
 	}
 
 	void Set_Dirty(bool dirty)
@@ -1480,22 +1750,43 @@ private:
 		}
 	}
 
+	// Force the segmented View/Edit pair to reflect `editActive` without
+	// re-firing Toggle_Edit_Mode (used when a mode change is rejected).
+	void Restore_Mode_Buttons(bool editActive)
+	{
+		QSignalBlocker block_edit(m_EditButton);
+		QSignalBlocker block_view(m_ViewButton);
+		m_EditButton->setChecked(editActive);
+		m_ViewButton->setChecked(!editActive);
+	}
+
 	void Update_Edit_Buttons()
 	{
+		m_UndoButton->setVisible(m_EditMode);
+		m_RedoButton->setVisible(m_EditMode);
 		m_SaveButton->setVisible(m_EditMode);
 		m_RevertButton->setVisible(m_EditMode);
+		m_UndoButton->setEnabled(m_EditMode && m_UndoStack.canUndo());
+		m_RedoButton->setEnabled(m_EditMode && m_UndoStack.canRedo());
 		m_SaveButton->setEnabled(m_EditMode && m_Dirty);
 		m_RevertButton->setEnabled(m_EditMode && m_Dirty);
 	}
 
 	QPushButton		*m_MeshButton;
+	QPushButton		*m_ViewButton;
 	QPushButton		*m_EditButton;
+	QPushButton		*m_UndoButton;
+	QPushButton		*m_RedoButton;
 	QPushButton		*m_SaveButton;
 	QPushButton		*m_RevertButton;
 	QScrollArea		*m_Scroll;
 	QLabel			*m_StatusLabel;
 	HelpEventFilter	*m_HelpFilter;
+	QAction			*m_UndoAction;
+	QAction			*m_RedoAction;
 	MaterialDocument m_Document;
+	QUndoStack		m_UndoStack;
+	MeshMaterialData m_EditBaseline;	// pre-edit state of the shown mesh (for undo diffs)
 	int				m_CurrentIndex;
 	bool			m_EditMode;
 	bool			m_Dirty;
@@ -1650,6 +1941,41 @@ bool PanelHasUnsavedChanges()
 bool RequestPanelSave()
 {
 	return g_Panel == nullptr || g_Panel->Request_Save();
+}
+
+bool PanelIsEditing()
+{
+	return g_Panel != nullptr && g_Panel->Is_Editing();
+}
+
+bool PanelCanUndo()
+{
+	return g_Panel != nullptr && g_Panel->Can_Undo();
+}
+
+bool PanelCanRedo()
+{
+	return g_Panel != nullptr && g_Panel->Can_Redo();
+}
+
+bool PanelCanSaveOrRevert()
+{
+	return g_Panel != nullptr && g_Panel->Can_Save_Or_Revert();
+}
+
+void RequestPanelUndo()
+{
+	if (g_Panel != nullptr) g_Panel->Menu_Undo();
+}
+
+void RequestPanelRedo()
+{
+	if (g_Panel != nullptr) g_Panel->Menu_Redo();
+}
+
+void RequestPanelRevert()
+{
+	if (g_Panel != nullptr) g_Panel->Menu_Revert();
 }
 
 void ApplyPanelTheme(const PanelTheme &theme)

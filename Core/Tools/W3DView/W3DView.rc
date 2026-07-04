@@ -430,7 +430,16 @@ BEGIN
     BEGIN
         MENUITEM "&Open...\tCtrl+O",            IDM_MATVIEWER_OPEN
         MENUITEM SEPARATOR
+        MENUITEM "&Save\tCtrl+S",               IDM_MATVIEWER_SAVE
+        MENUITEM SEPARATOR
         MENUITEM "&Close",                      IDM_MATVIEWER_CLOSE
+    END
+    POPUP "&Edit"
+    BEGIN
+        MENUITEM "&Undo\tCtrl+Z",               IDM_MATVIEWER_UNDO
+        MENUITEM "&Redo\tCtrl+Shift+Z",         IDM_MATVIEWER_REDO
+        MENUITEM SEPARATOR
+        MENUITEM "Re&vert",                     IDM_MATVIEWER_REVERT
     END
     POPUP "&View"
     BEGIN

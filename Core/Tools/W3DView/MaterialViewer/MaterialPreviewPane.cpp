@@ -220,13 +220,19 @@ CMaterialPreviewPane::LoadModel(const char *name)
 	m_Scene->Add_Render_Object(render_obj);
 	m_RenderObj = render_obj;
 
-	// Frame the camera on the object's bounding sphere.
+	// Only re-frame the camera when a *different* object is loaded. Reloading
+	// the same model (e.g. the post-save asset refresh after a material edit)
+	// keeps the user's current orbit and zoom so the view doesn't jump.
+	bool same_model = (m_LoadedName == name);
 	SphereClass sphere = render_obj->Get_Bounding_Sphere();
 	m_Center = sphere.Center;
-	m_Distance = sphere.Radius * 3.0F;
-	m_Distance = (m_Distance < 1.0F) ? 1.0F : m_Distance;
-	m_Yaw = 0;
-	m_Pitch = 0.35F;
+	if (!same_model) {
+		m_Distance = sphere.Radius * 3.0F;
+		m_Distance = (m_Distance < 1.0F) ? 1.0F : m_Distance;
+		m_Yaw = 0;
+		m_Pitch = 0.35F;
+	}
+	m_LoadedName = name;
 	Update_Camera();
 	return true;
 }
@@ -241,6 +247,9 @@ CMaterialPreviewPane::UnloadModel()
 		m_RenderObj->Release_Ref();
 		m_RenderObj = nullptr;
 	}
+	// Deliberately keep m_LoadedName: a reload of the same model (unload then
+	// load during the post-save refresh) must preserve the camera. A genuine
+	// mesh switch loads a different name and re-frames.
 }
 
 void
