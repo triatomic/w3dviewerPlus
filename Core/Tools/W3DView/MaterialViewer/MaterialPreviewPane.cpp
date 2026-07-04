@@ -30,6 +30,7 @@
 #include "scene.h"
 #include "shader.h"
 #include "vertmaterial.h"
+#include "w3d_file.h"
 #include "ww3d.h"
 #include "../W3DDarkMode.h"
 #include "../W3DViewDoc.h"
@@ -350,6 +351,26 @@ void Apply_Mesh_Materials(MeshClass *mesh, const W3dMaterialViewer::MeshMaterial
 				edit->Set_Emissive(vm.emissive[0] / 255.0F, vm.emissive[1] / 255.0F, vm.emissive[2] / 255.0F);
 				edit->Set_Opacity(vm.opacity);
 				edit->Set_Shininess(vm.shininess);
+
+				// --- Stage 0/1 UV mapping type + mapper args ---
+				// Rebuild the mappers exactly as the loader does: clear both
+				// stages, then let the engine's own factory recreate them from
+				// the edited mapping-type bits (in attributes) and args strings.
+				// A change to plain UV leaves the cleared (null) mapper.
+				edit->Set_Mapper(nullptr, 0);
+				edit->Set_Mapper(nullptr, 1);
+				W3dVertexMaterialStruct vmat_struct;
+				::memset(&vmat_struct, 0, sizeof(vmat_struct));
+				vmat_struct.Attributes = vm.attributes;
+				// Parse_Mapping_Args takes non-const char*; copy the args strings.
+				std::vector<char> args0(vm.mapperArgs0.begin(), vm.mapperArgs0.end());
+				args0.push_back('\0');
+				std::vector<char> args1(vm.mapperArgs1.begin(), vm.mapperArgs1.end());
+				args1.push_back('\0');
+				edit->Parse_Mapping_Args(vmat_struct,
+					vm.mapperArgs0.empty() ? nullptr : args0.data(),
+					vm.mapperArgs1.empty() ? nullptr : args1.data());
+
 				model->Replace_VertexMaterial(live, edit);
 				edit->Release_Ref();	// Replace_VertexMaterial took its own ref
 			}

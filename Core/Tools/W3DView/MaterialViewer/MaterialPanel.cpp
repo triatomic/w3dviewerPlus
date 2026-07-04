@@ -56,6 +56,7 @@
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QSpinBox>
+#include <QtWidgets/QStackedWidget>
 #include <QtWidgets/QStyleFactory>
 #include <QtWidgets/QTabWidget>
 #include <QtWidgets/QToolButton>
@@ -541,6 +542,72 @@ QToolButton *Make_Copy_Button(const QString &text, const char *tooltip)
 	return copy;
 }
 
+// Applies the segmented-control stylesheet to a pair of buttons named
+// "segLeft"/"segRight": flatten the seam corners into one divider, highlight
+// the checked half, hover-tint the inactive half. Palette-driven for light/dark.
+void Style_Segment_Pair(QWidget *left, QWidget *right)
+{
+	// Use the application palette (which the panel sets to the active theme in
+	// Apply_Theme) rather than the button's own — a freshly created / not-yet-
+	// parented button still carries the default light palette, which would make
+	// the segments render light/white in dark mode.
+	QPalette pal = QApplication::palette();
+	QColor border = pal.color(QPalette::Mid);
+	QColor face = pal.color(QPalette::Button);
+	QColor text = pal.color(QPalette::ButtonText);
+	QColor sel = pal.color(QPalette::Highlight);
+	QColor selText = pal.color(QPalette::HighlightedText);
+	QColor hover = g_DarkTheme ? face.lighter(130) : face.darker(108);
+
+	QString css = QStringLiteral(
+		"QPushButton#segLeft, QPushButton#segRight {"
+		"  border: 1px solid %1; padding: 3px 12px; color: %2;"
+		"  background: %3; }"
+		"QPushButton#segLeft { border-top-left-radius: 4px;"
+		"  border-bottom-left-radius: 4px; border-right: none; }"
+		"QPushButton#segRight { border-top-right-radius: 4px;"
+		"  border-bottom-right-radius: 4px; }"
+		"QPushButton#segLeft:checked, QPushButton#segRight:checked {"
+		"  background: %4; color: %5; }"
+		"QPushButton#segLeft:hover:!checked, QPushButton#segRight:hover:!checked {"
+		"  background: %6; }")
+		.arg(border.name(), text.name(), face.name(),
+			 sel.name(), selText.name(), hover.name());
+
+	left->setStyleSheet(css);
+	right->setStyleSheet(css);
+}
+
+// Builds a glued, mutually-exclusive two-button segmented toggle (like the
+// View/Edit control). `left`/`right` receive the two checkable buttons; the
+// left one starts checked. The caller connects toggled() for behavior.
+QWidget *Make_Segmented_Toggle(const QString &leftText, const QString &rightText,
+	QPushButton *&left, QPushButton *&right)
+{
+	left = new QPushButton(leftText);
+	left->setCheckable(true);
+	left->setChecked(true);
+	left->setObjectName(QStringLiteral("segLeft"));
+	right = new QPushButton(rightText);
+	right->setCheckable(true);
+	right->setObjectName(QStringLiteral("segRight"));
+
+	QButtonGroup *group = new QButtonGroup(left);	// parented so it lives with the pair
+	group->setExclusive(true);
+	group->addButton(left);
+	group->addButton(right);
+
+	QWidget *row = new QWidget;
+	QHBoxLayout *hl = new QHBoxLayout(row);
+	hl->setContentsMargins(0, 0, 0, 0);
+	hl->setSpacing(0);
+	hl->addWidget(left);
+	hl->addWidget(right);
+
+	Style_Segment_Pair(left, right);
+	return row;
+}
+
 // Parses "UVSourceChannel=<n>" out of a mapper args string; 1 when absent.
 int Parse_UV_Channel(const std::string &args)
 {
@@ -592,12 +659,127 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 	ChangeFn typing = ctx.markTyping;
 
 	// Build the args editor first so the Type combo can prefill it on change.
+	// It has two views over the same key=value string: a raw multi-line text box
+	// and a "pretty" grid of editable Key / Value fields. A toggle swaps between
+	// them; whichever is active writes back to *args and rebuilds the other.
+	std::string *args_ptr = args;
 	QPlainTextEdit *args_edit = new QPlainTextEdit(QString::fromStdString(*args));
 	args_edit->setReadOnly(!ctx.edit);
 	args_edit->setFixedHeight(56);
 	Set_Help(args_edit, QString::fromLatin1(Help::MAPPER_ARGS));
+
+	// Pretty (key/value grid) view.
+	QWidget *pretty = new QWidget;
+	QVBoxLayout *pretty_layout = new QVBoxLayout(pretty);
+	pretty_layout->setContentsMargins(0, 0, 0, 0);
+	pretty_layout->setSpacing(2);
+
+	QStackedWidget *args_stack = new QStackedWidget;
+	args_stack->addWidget(args_edit);	// index 0 = raw
+	args_stack->addWidget(pretty);		// index 1 = pretty
+
+	// A QStackedWidget sizes to the LARGEST page, so a tall Table page would keep
+	// the stack tall after switching back to Raw. Make only the current page
+	// contribute to the vertical size hint; hidden pages are Ignored and collapse.
+	QObject::connect(args_stack, &QStackedWidget::currentChanged,
+		[args_stack](int index) {
+			for (int i = 0; i < args_stack->count(); i++) {
+				QWidget *page = args_stack->widget(i);
+				QSizePolicy sp = page->sizePolicy();
+				sp.setVerticalPolicy(i == index ? QSizePolicy::Preferred
+												: QSizePolicy::Ignored);
+				page->setSizePolicy(sp);
+			}
+			args_stack->updateGeometry();
+		});
+	// Apply the initial policy (Raw is page 0): collapse the Table page's height.
+	{
+		QSizePolicy sp = pretty->sizePolicy();
+		sp.setVerticalPolicy(QSizePolicy::Ignored);
+		pretty->setSizePolicy(sp);
+	}
+
+	// Raw | Pretty segmented toggle (same design as the View/Edit control):
+	// Raw = multi-line text, Pretty = editable Key/Value grid. Declared here so
+	// mapping_change can reference the Pretty button; wired up below.
+	QPushButton *raw_btn = nullptr;
+	QPushButton *pretty_toggle = nullptr;
+	QWidget *args_mode_row = Make_Segmented_Toggle(
+		QStringLiteral("Raw"), QStringLiteral("Table"), raw_btn, pretty_toggle);
+	raw_btn->setToolTip(QStringLiteral("Edit mapper args as raw Key=Value text"));
+	pretty_toggle->setToolTip(QStringLiteral("Edit mapper args as a Key / Value table"));
+
+	// Rebuilds the pretty grid from the current *args string. Each non-empty
+	// "Key=Value" line becomes a row of two line edits; edits rewrite *args.
+	auto rebuild_pretty = [pretty, pretty_layout, args_ptr, args_edit, typing, edit = ctx.edit]() {
+		// Clear existing rows.
+		QLayoutItem *item;
+		while ((item = pretty_layout->takeAt(0)) != nullptr) {
+			if (item->widget()) item->widget()->deleteLater();
+			delete item;
+		}
+
+		// Serialize the current field rows back into *args and the raw box.
+		auto serialize = [pretty_layout, args_ptr, args_edit, typing]() {
+			QString out;
+			for (int i = 0; i < pretty_layout->count(); i++) {
+				QWidget *row = pretty_layout->itemAt(i)->widget();
+				if (row == nullptr) continue;
+				QLineEdit *k = row->findChild<QLineEdit *>(QStringLiteral("k"));
+				QLineEdit *v = row->findChild<QLineEdit *>(QStringLiteral("v"));
+				if (k == nullptr) continue;
+				QString key = k->text().trimmed();
+				if (key.isEmpty()) continue;
+				out += key + QStringLiteral("=") + (v ? v->text().trimmed() : QString());
+				out += QStringLiteral("\n");
+			}
+			if (out.endsWith('\n')) out.chop(1);
+			*args_ptr = out.toStdString();
+			{ QSignalBlocker b(args_edit); args_edit->setPlainText(out); }
+			if (typing) typing();
+		};
+
+		// One editable Key / Value row.
+		auto add_row = [pretty, pretty_layout, edit, serialize](const QString &key, const QString &value) {
+			QWidget *row = new QWidget;
+			QHBoxLayout *hl = new QHBoxLayout(row);
+			hl->setContentsMargins(0, 0, 0, 0);
+			hl->setSpacing(2);
+			QLineEdit *k = new QLineEdit(key);
+			k->setObjectName(QStringLiteral("k"));
+			k->setPlaceholderText(QStringLiteral("Key"));
+			QLineEdit *v = new QLineEdit(value);
+			v->setObjectName(QStringLiteral("v"));
+			v->setPlaceholderText(QStringLiteral("Value"));
+			k->setReadOnly(!edit);
+			v->setReadOnly(!edit);
+			if (edit) {
+				QObject::connect(k, &QLineEdit::textChanged, [serialize]() { serialize(); });
+				QObject::connect(v, &QLineEdit::textChanged, [serialize]() { serialize(); });
+			}
+			hl->addWidget(k, 1);
+			hl->addWidget(v, 1);
+			pretty_layout->addWidget(row);
+		};
+
+		// Parse the raw string into key/value rows.
+		QString raw = QString::fromStdString(*args_ptr);
+		const QStringList lines = raw.split('\n', Qt::SkipEmptyParts);
+		for (const QString &line : lines) {
+			int eq = line.indexOf('=');
+			if (eq < 0) {
+				add_row(line.trimmed(), QString());
+			} else {
+				add_row(line.left(eq).trimmed(), line.mid(eq + 1).trimmed());
+			}
+		}
+		if (edit) {
+			// A trailing blank row lets the user add a new key/value pair.
+			add_row(QString(), QString());
+		}
+	};
+
 	if (ctx.edit) {
-		std::string *args_ptr = args;
 		QObject::connect(args_edit, &QPlainTextEdit::textChanged, [args_edit, args_ptr, typing]() {
 			*args_ptr = args_edit->toPlainText().toStdString();
 			if (typing) typing();	// coalesced: one undo step per typing burst
@@ -606,8 +788,8 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 
 	std::function<void(int)> mapping_change;
 	if (ctx.edit) {
-		std::string *args_ptr = args;
-		mapping_change = [material_ptr, mask, shift, dirty, args_edit, args_ptr](int value) {
+		mapping_change = [material_ptr, mask, shift, dirty, args_edit, args_ptr,
+				rebuild_pretty, pretty_toggle](int value) {
 			material_ptr->attributes = (material_ptr->attributes & ~mask)
 				| (((uint32_t)value << shift) & mask);
 			// Prefill the arg-key template for the chosen mapper, but only when
@@ -621,6 +803,8 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 					QSignalBlocker block(args_edit);
 					args_edit->setPlainText(QString::fromLatin1(tmpl));
 					*args_ptr = args_edit->toPlainText().toStdString();
+					// Keep the pretty grid in sync if it is the active view.
+					if (pretty_toggle->isChecked()) rebuild_pretty();
 				}
 			}
 			if (dirty) dirty();
@@ -630,13 +814,30 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 	Set_Help(type_combo, QString::fromLatin1(Help::MAPPING_TYPE));
 	form->addRow(QStringLiteral("Type:"), type_combo);
 
+	// Wire the Pretty button (Raw is its exclusive twin). Selecting Pretty
+	// rebuilds the grid from the latest text and shows it; Raw shows the text.
+	QObject::connect(pretty_toggle, &QPushButton::toggled,
+		[args_stack, rebuild_pretty](bool on) {
+			if (on) rebuild_pretty();		// (re)build grid from the latest text
+			args_stack->setCurrentIndex(on ? 1 : 0);
+		});
+
 	QWidget *args_row = new QWidget;
-	QHBoxLayout *args_layout = new QHBoxLayout(args_row);
-	args_layout->setContentsMargins(0, 0, 0, 0);
-	args_layout->setSpacing(2);
-	args_layout->addWidget(args_edit, 1);
-	args_layout->addWidget(Make_Copy_Button(QString::fromStdString(*args), "Copy mapper args"),
+	QVBoxLayout *args_col = new QVBoxLayout(args_row);
+	args_col->setContentsMargins(0, 0, 0, 0);
+	args_col->setSpacing(2);
+
+	// Raw | Table toggle sits above the editor.
+	args_col->addWidget(args_mode_row, 0, Qt::AlignLeft);
+
+	QHBoxLayout *args_top = new QHBoxLayout;
+	args_top->setContentsMargins(0, 0, 0, 0);
+	args_top->setSpacing(2);
+	args_top->addWidget(args_stack, 1);
+	args_top->addWidget(Make_Copy_Button(QString::fromStdString(*args), "Copy mapper args"),
 		0, Qt::AlignTop);
+	args_col->addLayout(args_top);
+
 	form->addRow(QStringLiteral("Args:"), args_row);
 
 	// UV Channel stays derived (read-only) even in edit mode; it lives inside
@@ -1402,31 +1603,7 @@ private:
 		if (m_ViewButton == nullptr || m_EditButton == nullptr) {
 			return;
 		}
-
-		QColor border = palette().color(QPalette::Mid);
-		QColor face = palette().color(QPalette::Button);
-		QColor text = palette().color(QPalette::ButtonText);
-		QColor sel = palette().color(QPalette::Highlight);
-		QColor selText = palette().color(QPalette::HighlightedText);
-		QColor hover = g_DarkTheme ? face.lighter(130) : face.darker(108);
-
-		QString css = QStringLiteral(
-			"QPushButton#segLeft, QPushButton#segRight {"
-			"  border: 1px solid %1; padding: 3px 12px; color: %2;"
-			"  background: %3; }"
-			"QPushButton#segLeft { border-top-left-radius: 4px;"
-			"  border-bottom-left-radius: 4px; border-right: none; }"
-			"QPushButton#segRight { border-top-right-radius: 4px;"
-			"  border-bottom-right-radius: 4px; }"
-			"QPushButton#segLeft:checked, QPushButton#segRight:checked {"
-			"  background: %4; color: %5; }"
-			"QPushButton#segLeft:hover:!checked, QPushButton#segRight:hover:!checked {"
-			"  background: %6; }")
-			.arg(border.name(), text.name(), face.name(),
-				 sel.name(), selText.name(), hover.name());
-
-		m_ViewButton->setStyleSheet(css);
-		m_EditButton->setStyleSheet(css);
+		Style_Segment_Pair(m_ViewButton, m_EditButton);
 	}
 
 	void Show_Empty()
