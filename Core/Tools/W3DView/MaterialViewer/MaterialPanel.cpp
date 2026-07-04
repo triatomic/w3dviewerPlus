@@ -933,9 +933,15 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 				gk->setToolTip(QStringLiteral("Suggested key for this mapper type — edit to add"));
 				gv->setToolTip(QStringLiteral("Suggested value — edit to add"));
 
-				// Promote to a real row on first edit: solid style + k/v names, so
-				// the next serialize picks it up. Re-serialize to persist.
-				auto promote = [row, gk, gv, serialize]() {
+				// Promote to a real row (solid style + k/v names, then serialize)
+				// only when the user commits the edit by leaving the field — Tab
+				// or Enter — via editingFinished. A per-field "touched" flag guards
+				// against promoting a ghost the user merely tabbed through without
+				// changing. Typing alone does not write the suggestion.
+				auto touched = std::make_shared<bool>(false);
+				auto promote = [row, gk, gv, serialize, touched]() {
+					if (!*touched) return;			// tabbed through, unchanged
+					if (gk->objectName() == QStringLiteral("k")) return;	// already promoted
 					gk->setObjectName(QStringLiteral("k"));
 					gv->setObjectName(QStringLiteral("v"));
 					for (QLineEdit *le : { gk, gv }) {
@@ -947,8 +953,18 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 					}
 					serialize();
 				};
-				QObject::connect(gk, &QLineEdit::textEdited, [promote]() { promote(); });
-				QObject::connect(gv, &QLineEdit::textEdited, [promote]() { promote(); });
+				QObject::connect(gk, &QLineEdit::textEdited, [touched]() { *touched = true; });
+				QObject::connect(gv, &QLineEdit::textEdited, [touched]() { *touched = true; });
+				QObject::connect(gk, &QLineEdit::editingFinished, [promote]() { promote(); });
+				QObject::connect(gv, &QLineEdit::editingFinished, [promote]() { promote(); });
+				// Once promoted (objectName == k), edits serialize live like any
+				// real row; before that (still a ghost), typing only sets touched.
+				QObject::connect(gk, &QLineEdit::textChanged, [gk, serialize]() {
+					if (gk->objectName() == QStringLiteral("k")) serialize();
+				});
+				QObject::connect(gv, &QLineEdit::textChanged, [gk, serialize]() {
+					if (gk->objectName() == QStringLiteral("k")) serialize();
+				});
 
 				hl->addWidget(gk, 1);
 				hl->addWidget(gv, 1);
