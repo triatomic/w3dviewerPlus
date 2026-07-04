@@ -32,6 +32,8 @@ class SimpleSceneClass;
 class CameraClass;
 class LightClass;
 
+namespace W3dMaterialViewer { struct MaterialDocument; }
+
 // Implements DX8_CleanupHook because the pane owns non-managed device resources
 // (additional swap chain + depth surface). D3D8 Reset fails while they are
 // alive, leaving the device corrupted; the hook releases them before a reset.
@@ -50,6 +52,13 @@ public:
 	// Removes the current render object and releases its ref (so the asset
 	// manager can drop the prototype before a reload).
 	void UnloadModel();
+
+	// Applies the edited material document onto the *live* preview render object
+	// in memory, without touching the .w3d file. Vertex-material colors/opacity/
+	// shininess and shader blend/flags are stamped onto per-pass materials that
+	// are first cloned, so the shared asset-manager prototype (used by the main
+	// viewport) is never mutated. Meshes are matched to the document by name.
+	void ApplyLiveMaterials(const W3dMaterialViewer::MaterialDocument &document);
 
 	// Renders one frame into the swap chain. Must be called from the main
 	// thread, outside the main view's Begin_Render/End_Render bracket.

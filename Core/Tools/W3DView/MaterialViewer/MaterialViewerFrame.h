@@ -68,6 +68,7 @@ protected:
 	afx_msg void OnDestroy();
 	afx_msg void OnSize(UINT type, int cx, int cy);
 	afx_msg BOOL OnEraseBkgnd(CDC *dc);
+	afx_msg void OnTimer(UINT_PTR event_id);
 	afx_msg void OnFileOpen();
 	afx_msg void OnFileClose();
 	afx_msg void OnFileSave();
@@ -114,6 +115,13 @@ private:
 	static void DirtyChangedThunk(bool dirty);
 	static void ResolveTextureThunk(W3dMaterialViewer::TextureData &texture);
 
+	// Live-preview: the panel calls this after every committed edit. We copy the
+	// document and (re)start a short debounce timer; when it fires the edited
+	// materials are stamped onto the live preview render object in memory (no
+	// file write). See MaterialPreviewPane::ApplyLiveMaterials.
+	void OnPanelLivePreview(const W3dMaterialViewer::MaterialDocument &document);
+	static void LivePreviewThunk(const W3dMaterialViewer::MaterialDocument &document);
+
 	// Reloads this file's assets so the preview reflects freshly saved bytes.
 	void ReloadAssetsForPreview();
 
@@ -125,6 +133,11 @@ private:
 
 	std::string m_SourceFilePath;	// disk path used for the title / reload
 	bool		m_Dirty;
+
+	// Debounced live-preview state: the latest edited document and whether a
+	// refresh timer is pending.
+	W3dMaterialViewer::MaterialDocument m_LivePreviewDoc;
+	bool		m_LivePreviewPending;
 
 	static CMaterialViewerFrame *_TheInstance;
 

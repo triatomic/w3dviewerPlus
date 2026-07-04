@@ -44,6 +44,11 @@ namespace
 	const int PREVIEW_ID = 1;
 	const int PLACEHOLDER_ID = 2;
 
+	// Debounce timer for the live material preview: coalesce a burst of edits
+	// (dragging a spin box, typing) into a single in-memory apply.
+	const UINT_PTR LIVE_PREVIEW_TIMER = 0xA1;
+	const UINT LIVE_PREVIEW_DELAY_MS = 200;
+
 	// Preview pane takes this share of the client width; the panel gets the rest.
 	const float PREVIEW_WIDTH_RATIO = 0.55F;
 
@@ -159,6 +164,7 @@ BEGIN_MESSAGE_MAP(CMaterialViewerFrame, CFrameWnd)
 	ON_WM_CLOSE()
 	ON_WM_DESTROY()
 	ON_WM_SIZE()
+	ON_WM_TIMER()
 	ON_WM_ERASEBKGND()
 	ON_COMMAND(IDM_MATVIEWER_OPEN, OnFileOpen)
 	ON_COMMAND(IDM_MATVIEWER_CLOSE, OnFileClose)
@@ -256,7 +262,8 @@ CMaterialViewerFrame::CMaterialViewerFrame()
 	: m_Preview(nullptr),
 	  m_PanelWnd(nullptr),
 	  m_ShowFullObject(false),
-	  m_Dirty(false)
+	  m_Dirty(false),
+	  m_LivePreviewPending(false)
 {
 }
 
@@ -416,6 +423,7 @@ CMaterialViewerFrame::OnCreate(LPCREATESTRUCT create_struct)
 	W3dMaterialViewer::SetPanelRevertCallback(&CMaterialViewerFrame::RevertThunk);
 	W3dMaterialViewer::SetPanelDirtyChangedCallback(&CMaterialViewerFrame::DirtyChangedThunk);
 	W3dMaterialViewer::SetPanelResolveTextureCallback(&CMaterialViewerFrame::ResolveTextureThunk);
+	W3dMaterialViewer::SetPanelLivePreviewCallback(&CMaterialViewerFrame::LivePreviewThunk);
 #endif
 
 	if (m_PanelWnd == nullptr) {
@@ -470,6 +478,8 @@ CMaterialViewerFrame::OnClose()
 void
 CMaterialViewerFrame::OnDestroy()
 {
+	KillTimer(LIVE_PREVIEW_TIMER);	// no late live-preview fire after teardown
+
 #ifdef W3DVIEW_HAS_QT
 	if (m_PanelWnd != nullptr) {
 		W3dMaterialViewer::DestroyPanel();
@@ -719,6 +729,15 @@ CMaterialViewerFrame::UpdatePreviewModel()
 			m_Preview->LoadModel(other.c_str());
 		}
 	}
+
+	// A freshly loaded render object comes from the pristine prototype; if the
+	// user has unsaved edits, re-stamp them so switching meshes / toggling the
+	// full-object view keeps showing the in-progress material changes. The
+	// panel's latest edits live in m_LivePreviewDoc (m_Document only updates on
+	// save), so prefer it while dirty.
+	if (m_Dirty) {
+		m_Preview->ApplyLiveMaterials(m_LivePreviewDoc);
+	}
 }
 
 void
@@ -842,6 +861,11 @@ CMaterialViewerFrame::RevertDocument()
 	}
 #endif
 
+	// The live preview still carries the reverted (edited) materials. Rebuild the
+	// render object from the untouched prototype so it returns to the original
+	// look; m_Dirty is now false so UpdatePreviewModel won't re-stamp any edits.
+	UpdatePreviewModel();
+
 	UpdateTitle();
 }
 
@@ -939,6 +963,41 @@ CMaterialViewerFrame::DirtyChangedThunk(bool dirty)
 	if (_TheInstance != nullptr) {
 		_TheInstance->OnPanelDirtyChanged(dirty);
 	}
+}
+
+// Live-preview: stash the latest edited document and (re)arm the debounce
+// timer. Coalescing avoids re-cloning materials on every spin-box tick.
+void
+CMaterialViewerFrame::OnPanelLivePreview(const W3dMaterialViewer::MaterialDocument &document)
+{
+	if (m_Preview == nullptr || !::IsWindow(m_hWnd)) {
+		return;
+	}
+	m_LivePreviewDoc = document;
+	m_LivePreviewPending = true;
+	SetTimer(LIVE_PREVIEW_TIMER, LIVE_PREVIEW_DELAY_MS, nullptr);	// restart
+}
+
+void
+CMaterialViewerFrame::LivePreviewThunk(const W3dMaterialViewer::MaterialDocument &document)
+{
+	if (_TheInstance != nullptr) {
+		_TheInstance->OnPanelLivePreview(document);
+	}
+}
+
+void
+CMaterialViewerFrame::OnTimer(UINT_PTR event_id)
+{
+	if (event_id == LIVE_PREVIEW_TIMER) {
+		KillTimer(LIVE_PREVIEW_TIMER);
+		if (m_LivePreviewPending && m_Preview != nullptr) {
+			m_LivePreviewPending = false;
+			m_Preview->ApplyLiveMaterials(m_LivePreviewDoc);
+		}
+		return;
+	}
+	CFrameWnd::OnTimer(event_id);
 }
 
 // Re-decodes a single texture thumbnail when its filename is edited. Uses the

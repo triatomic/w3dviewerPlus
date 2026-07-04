@@ -21,13 +21,20 @@
 
 #include "assetmgr.h"
 #include "camera.h"
+#include "dx8renderer.h"
 #include "dx8wrapper.h"
 #include "light.h"
+#include "mesh.h"
+#include "meshmdl.h"
 #include "rendobj.h"
 #include "scene.h"
+#include "shader.h"
+#include "vertmaterial.h"
 #include "ww3d.h"
 #include "../W3DDarkMode.h"
 #include "../W3DViewDoc.h"
+
+#include "W3dMaterialData.h"
 
 BEGIN_MESSAGE_MAP(CMaterialPreviewPane, CWnd)
 	ON_WM_CREATE()
@@ -202,6 +209,32 @@ CMaterialPreviewPane::Create_Swap_Chain()
 	}
 }
 
+namespace
+{
+
+// Recursively give every MeshClass under a render object a private copy of its
+// MeshModelClass (which is shared with the cached prototype by default), so the
+// live preview can mutate materials without affecting the shared asset.
+void Make_Preview_Meshes_Unique(RenderObjClass *obj)
+{
+	if (obj == nullptr) {
+		return;
+	}
+	if (obj->Class_ID() == RenderObjClass::CLASSID_MESH) {
+		((MeshClass *)obj)->Make_Unique(true);	// force clone of the mesh model
+	}
+	int count = obj->Get_Num_Sub_Objects();
+	for (int i = 0; i < count; i++) {
+		RenderObjClass *child = obj->Get_Sub_Object(i);
+		if (child != nullptr) {
+			Make_Preview_Meshes_Unique(child);
+			child->Release_Ref();	// Get_Sub_Object adds a ref
+		}
+	}
+}
+
+} // anonymous namespace
+
 bool
 CMaterialPreviewPane::LoadModel(const char *name)
 {
@@ -219,6 +252,13 @@ CMaterialPreviewPane::LoadModel(const char *name)
 	render_obj->Set_Transform(Matrix3D(1));
 	m_Scene->Add_Render_Object(render_obj);
 	m_RenderObj = render_obj;
+
+	// Mesh instances share their MeshModelClass with the cached asset-manager
+	// prototype by default. The live material preview mutates the model, so give
+	// this preview's meshes private copies first — otherwise edits would leak
+	// into the shared prototype (and the main viewport) and could not be undone
+	// by reloading. See ApplyLiveMaterials.
+	Make_Preview_Meshes_Unique(render_obj);
 
 	// Only re-frame the camera when a *different* object is loaded. Reloading
 	// the same model (e.g. the post-save asset refresh after a material edit)
@@ -250,6 +290,139 @@ CMaterialPreviewPane::UnloadModel()
 	// Deliberately keep m_LoadedName: a reload of the same model (unload then
 	// load during the post-save refresh) must preserve the camera. A genuine
 	// mesh switch loads a different name and re-frames.
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//	Live material apply
+//////////////////////////////////////////////////////////////////////////////
+
+namespace
+{
+
+// Mesh names in the document are "Container.MeshName"; a render object's mesh
+// reports either that full name or just the trailing "MeshName". Match on the
+// part after the last '.', case-insensitively, so both forms line up.
+const char *Bare_Mesh_Name(const char *name)
+{
+	if (name == nullptr) {
+		return "";
+	}
+	const char *dot = strrchr(name, '.');
+	return (dot != nullptr) ? dot + 1 : name;
+}
+
+bool Mesh_Names_Match(const char *a, const char *b)
+{
+	return _stricmp(Bare_Mesh_Name(a), Bare_Mesh_Name(b)) == 0;
+}
+
+// Stamp one mesh's edited vertex materials + shaders onto the live model. The
+// model was already made private (Make_Preview_Meshes_Unique) so mutating it is
+// safe; the vertex material is still cloned so Replace_VertexMaterial has a
+// distinct new pointer to swap in and update the DX8 render category.
+void Apply_Mesh_Materials(MeshClass *mesh, const W3dMaterialViewer::MeshMaterialData &data)
+{
+	MeshModelClass *model = mesh->Peek_Model();
+	if (model == nullptr) {
+		return;
+	}
+
+	bool shader_changed = false;
+
+	int passes = model->Get_Pass_Count();
+	for (int pass = 0; pass < passes && pass < (int)data.passes.size(); pass++) {
+		const W3dMaterialViewer::PassData &pass_data = data.passes[pass];
+
+		// --- Vertex material: colors / opacity / shininess ---
+		// Replace_VertexMaterial swaps the material everywhere it is used (single
+		// slot or per-vertex array) AND updates the live DX8 render category, so
+		// the change is visible without re-registering. We clone the current one,
+		// edit the clone, and swap it in (never touching the shared original).
+		int vmi = pass_data.vertexMaterialIndex;
+		if (vmi >= 0 && vmi < (int)data.vertexMaterials.size()) {
+			const W3dMaterialViewer::VertexMaterialData &vm = data.vertexMaterials[vmi];
+			VertexMaterialClass *live = model->Peek_Single_Material(pass);
+			if (live != nullptr) {
+				VertexMaterialClass *edit = live->Clone();
+				edit->Set_Ambient(vm.ambient[0] / 255.0F, vm.ambient[1] / 255.0F, vm.ambient[2] / 255.0F);
+				edit->Set_Diffuse(vm.diffuse[0] / 255.0F, vm.diffuse[1] / 255.0F, vm.diffuse[2] / 255.0F);
+				edit->Set_Specular(vm.specular[0] / 255.0F, vm.specular[1] / 255.0F, vm.specular[2] / 255.0F);
+				edit->Set_Emissive(vm.emissive[0] / 255.0F, vm.emissive[1] / 255.0F, vm.emissive[2] / 255.0F);
+				edit->Set_Opacity(vm.opacity);
+				edit->Set_Shininess(vm.shininess);
+				model->Replace_VertexMaterial(live, edit);
+				edit->Release_Ref();	// Replace_VertexMaterial took its own ref
+			}
+		}
+
+		// --- Shader: blend / depth / gradients / alpha test ---
+		int si = pass_data.shaderIndex;
+		if (si >= 0 && si < (int)data.shaders.size()) {
+			const W3dMaterialViewer::ShaderData &sh = data.shaders[si];
+			// Start from the live shader so bits we don't manage are preserved,
+			// then overwrite the managed fields (their W3D chunk values map 1:1
+			// to the ShaderClass enums).
+			ShaderClass shader = model->Get_Single_Shader(pass);
+			shader.Set_Src_Blend_Func((ShaderClass::SrcBlendFuncType)sh.srcBlend);
+			shader.Set_Dst_Blend_Func((ShaderClass::DstBlendFuncType)sh.destBlend);
+			shader.Set_Depth_Compare((ShaderClass::DepthCompareType)sh.depthCompare);
+			shader.Set_Depth_Mask((ShaderClass::DepthMaskType)sh.depthMask);
+			shader.Set_Alpha_Test((ShaderClass::AlphaTestType)sh.alphaTest);
+			shader.Set_Primary_Gradient((ShaderClass::PriGradientType)sh.priGradient);
+			shader.Set_Secondary_Gradient((ShaderClass::SecGradientType)sh.secGradient);
+			// Detail color/alpha funcs are not live-previewed (the runtime shader
+			// exposes only the post-detail fields); they still save to the file.
+			model->Set_Single_Shader(shader, pass);
+			shader_changed = true;
+		}
+	}
+
+	// A shader change re-buckets which DX8 render category the mesh belongs to
+	// (categories are keyed by texture+shader), so rebuild its registration.
+	// Material changes above already updated their category in place.
+	if (shader_changed) {
+		TheDX8MeshRenderer.Unregister_Mesh_Type(model);
+		TheDX8MeshRenderer.Register_Mesh_Type(model);
+	}
+}
+
+// Recursively visit every MeshClass under a render object, matching it to a
+// document mesh by name and stamping the edits.
+void Apply_To_Render_Obj(RenderObjClass *obj, const W3dMaterialViewer::MaterialDocument &document)
+{
+	if (obj == nullptr) {
+		return;
+	}
+
+	if (obj->Class_ID() == RenderObjClass::CLASSID_MESH) {
+		const char *obj_name = obj->Get_Name();
+		for (const W3dMaterialViewer::MeshMaterialData &mesh_data : document.meshes) {
+			if (Mesh_Names_Match(obj_name, mesh_data.meshName.c_str())) {
+				Apply_Mesh_Materials((MeshClass *)obj, mesh_data);
+				break;
+			}
+		}
+	}
+
+	int count = obj->Get_Num_Sub_Objects();
+	for (int i = 0; i < count; i++) {
+		RenderObjClass *child = obj->Get_Sub_Object(i);
+		if (child != nullptr) {
+			Apply_To_Render_Obj(child, document);
+			child->Release_Ref();	// Get_Sub_Object adds a ref
+		}
+	}
+}
+
+} // anonymous namespace
+
+void
+CMaterialPreviewPane::ApplyLiveMaterials(const W3dMaterialViewer::MaterialDocument &document)
+{
+	if (m_RenderObj == nullptr) {
+		return;
+	}
+	Apply_To_Render_Obj(m_RenderObj, document);
 }
 
 void

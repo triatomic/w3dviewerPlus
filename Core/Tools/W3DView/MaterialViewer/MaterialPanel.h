@@ -82,6 +82,11 @@ void SetPanelRevertCallback(void (*callback)());
 // unsaved-changes marker in its title.
 void SetPanelDirtyChangedCallback(void (*callback)(bool dirty));
 
+// Invoked after every committed edit so the host can refresh the live 3D
+// preview from the in-memory document (typically debounced). Independent of
+// Save: the file is not written.
+void SetPanelLivePreviewCallback(void (*callback)(const MaterialDocument &document));
+
 // Decodes a preview thumbnail for a texture filename (needs the D3D device +
 // file factory, which live on the host side). Fills `resolvedPath` and the
 // preview pixels of `texture` (already carrying the name); leaves them empty

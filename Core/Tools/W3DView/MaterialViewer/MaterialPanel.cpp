@@ -83,6 +83,7 @@ bool (*g_SaveCallback)(const MaterialDocument &) = nullptr;
 void (*g_RevertCallback)() = nullptr;
 void (*g_DirtyChangedCallback)(bool) = nullptr;
 void (*g_ResolveTextureCallback)(TextureData &) = nullptr;
+void (*g_LivePreviewCallback)(const MaterialDocument &) = nullptr;
 
 //////////////////////////////////////////////////////////////////////////////
 //	Field help -> status strip
@@ -1704,6 +1705,16 @@ private:
 			QStringLiteral("Edit material"), m_EditBaseline, live, mergeable));
 		m_EditBaseline = live;	// next edit diffs against this state
 		Set_Dirty(true);
+		Notify_Live_Preview();
+	}
+
+	// Push the current document to the host's live 3D preview (debounced there).
+	// Independent of Save; the file is not written.
+	void Notify_Live_Preview()
+	{
+		if (g_LivePreviewCallback != nullptr) {
+			g_LivePreviewCallback(m_Document);
+		}
 	}
 
 	// MeshSnapshotHost: restore a mesh to `snapshot` (undo/redo) and refresh.
@@ -1730,6 +1741,7 @@ private:
 		// reflect the resulting clean/dirty state.
 		Show_Mesh(meshIndex);
 		Set_Dirty(!m_UndoStack.isClean());
+		Notify_Live_Preview();	// undo/redo also updates the live preview
 	}
 
 	void Set_Dirty(bool dirty)
@@ -1926,6 +1938,11 @@ void SetPanelRevertCallback(void (*callback)())
 void SetPanelDirtyChangedCallback(void (*callback)(bool dirty))
 {
 	g_DirtyChangedCallback = callback;
+}
+
+void SetPanelLivePreviewCallback(void (*callback)(const MaterialDocument &document))
+{
+	g_LivePreviewCallback = callback;
 }
 
 void SetPanelResolveTextureCallback(void (*callback)(TextureData &texture))
