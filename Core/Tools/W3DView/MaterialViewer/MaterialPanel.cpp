@@ -86,6 +86,10 @@ void (*g_DirtyChangedCallback)(bool) = nullptr;
 void (*g_ResolveTextureCallback)(TextureData &) = nullptr;
 void (*g_LivePreviewCallback)(const MaterialDocument &) = nullptr;
 
+// Sticky Raw/Table choice for the mapper-args editor, so the mode survives a
+// page rebuild (e.g. undo/redo, which re-runs Show_Mesh). false = Raw.
+bool g_ArgsTableMode = false;
+
 //////////////////////////////////////////////////////////////////////////////
 //	Field help -> status strip
 //////////////////////////////////////////////////////////////////////////////
@@ -739,7 +743,7 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 			if (typing) typing();
 		};
 
-		// One editable Key / Value row.
+		// One editable Key / Value row, with a delete (x) button in edit mode.
 		auto add_row = [pretty, pretty_layout, edit, serialize](const QString &key, const QString &value) {
 			QWidget *row = new QWidget;
 			QHBoxLayout *hl = new QHBoxLayout(row);
@@ -759,6 +763,21 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 			}
 			hl->addWidget(k, 1);
 			hl->addWidget(v, 1);
+			if (edit) {
+				QToolButton *del = new QToolButton;
+				del->setText(QString(QChar(0x00D7)));	// multiplication sign 'x'
+				del->setObjectName(QStringLiteral("del"));
+				del->setFixedSize(18, 18);
+				del->setAutoRaise(true);
+				del->setToolTip(QStringLiteral("Remove this key/value"));
+				// Delete the row, then re-serialize (removed row is skipped).
+				QObject::connect(del, &QToolButton::clicked, [row, serialize]() {
+					row->setParent(nullptr);
+					row->deleteLater();
+					serialize();
+				});
+				hl->addWidget(del, 0);
+			}
 			pretty_layout->addWidget(row);
 		};
 
@@ -816,8 +835,11 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 
 	// Wire the Pretty button (Raw is its exclusive twin). Selecting Pretty
 	// rebuilds the grid from the latest text and shows it; Raw shows the text.
+	// The choice is remembered globally so it survives a page rebuild (undo/redo
+	// re-runs Show_Mesh, which recreates this editor).
 	QObject::connect(pretty_toggle, &QPushButton::toggled,
 		[args_stack, rebuild_pretty](bool on) {
+			g_ArgsTableMode = on;
 			if (on) rebuild_pretty();		// (re)build grid from the latest text
 			args_stack->setCurrentIndex(on ? 1 : 0);
 		});
@@ -839,6 +861,12 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 	args_col->addLayout(args_top);
 
 	form->addRow(QStringLiteral("Args:"), args_row);
+
+	// Restore the sticky Raw/Table choice (default Raw). Only meaningful in edit
+	// mode; the toggled handler builds/shows the matching view.
+	if (ctx.edit && g_ArgsTableMode) {
+		pretty_toggle->setChecked(true);
+	}
 
 	// UV Channel stays derived (read-only) even in edit mode; it lives inside
 	// the args text, which the user edits directly.
