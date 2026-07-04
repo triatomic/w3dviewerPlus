@@ -27,6 +27,10 @@
 
 #include "MaterialPanel.h"
 
+#include <cctype>
+#include <utility>
+#include <vector>
+
 #include <QtCore/QEvent>
 #include <QtCore/QFileInfo>
 #include <QtGui/QClipboard>
@@ -170,6 +174,65 @@ const char *const MAPPER_ARG_TEMPLATES[] = {
 	"",																// 19 Grid WS Classic Env (no parser)
 	"",																// 20 Grid WS Env (no parser)
 };
+
+// Returns the template "Key=Value" lines for `mappingType` whose keys are NOT
+// already present in `currentArgs`. Used to show dimmed/italic ghost guidance of
+// the args a freshly chosen mapper type expects, without clobbering real args.
+static std::vector<std::pair<std::string, std::string> >
+Missing_Template_Args(int mappingType, const std::string &currentArgs)
+{
+	std::vector<std::pair<std::string, std::string> > missing;
+	if (mappingType < 0
+			|| mappingType >= (int)(sizeof(MAPPER_ARG_TEMPLATES) / sizeof(MAPPER_ARG_TEMPLATES[0]))) {
+		return missing;
+	}
+	const char *tmpl = MAPPER_ARG_TEMPLATES[mappingType];
+	if (tmpl[0] == '\0') {
+		return missing;
+	}
+
+	// Collect existing keys (lower-cased) from the current args string.
+	std::vector<std::string> have;
+	{
+		std::string line;
+		std::string src = currentArgs;
+		size_t start = 0;
+		while (start <= src.size()) {
+			size_t nl = src.find('\n', start);
+			line = (nl == std::string::npos) ? src.substr(start) : src.substr(start, nl - start);
+			size_t eq = line.find('=');
+			std::string key = (eq == std::string::npos) ? line : line.substr(0, eq);
+			// trim
+			while (!key.empty() && (key.front() == ' ' || key.front() == '\t')) key.erase(key.begin());
+			while (!key.empty() && (key.back() == ' ' || key.back() == '\t' || key.back() == '\r')) key.pop_back();
+			for (char &c : key) c = (char)tolower((unsigned char)c);
+			if (!key.empty()) have.push_back(key);
+			if (nl == std::string::npos) break;
+			start = nl + 1;
+		}
+	}
+
+	// Walk template lines; keep those whose key is not already present.
+	std::string t = tmpl;
+	size_t start = 0;
+	while (start <= t.size()) {
+		size_t nl = t.find('\n', start);
+		std::string line = (nl == std::string::npos) ? t.substr(start) : t.substr(start, nl - start);
+		size_t eq = line.find('=');
+		if (eq != std::string::npos) {
+			std::string key = line.substr(0, eq);
+			std::string val = line.substr(eq + 1);
+			std::string lkey = key;
+			for (char &c : lkey) c = (char)tolower((unsigned char)c);
+			bool present = false;
+			for (const std::string &h : have) { if (h == lkey) { present = true; break; } }
+			if (!present) missing.push_back(std::make_pair(key, val));
+		}
+		if (nl == std::string::npos) break;
+		start = nl + 1;
+	}
+	return missing;
+}
 
 //////////////////////////////////////////////////////////////////////////////
 //	Field help text (source: W3D Hub 3ds Max tools documentation)
@@ -662,6 +725,10 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 	ChangeFn dirty = ctx.markDirty;
 	ChangeFn typing = ctx.markTyping;
 
+	// Current mapping type, shared so the Type combo, the Table ghost rows, and
+	// the Raw ghost hint all track the latest selection.
+	auto cur_type = std::make_shared<int>(mapping);
+
 	// Build the args editor first so the Type combo can prefill it on change.
 	// It has two views over the same key=value string: a raw multi-line text box
 	// and a "pretty" grid of editable Key / Value fields. A toggle swaps between
@@ -672,14 +739,53 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 	args_edit->setFixedHeight(56);
 	Set_Help(args_edit, QString::fromLatin1(Help::MAPPER_ARGS));
 
+	// Dimmed italic hint under the Raw box: the template keys the selected type
+	// expects that aren't present yet ("Suggested: Key=Value, ..."). Refreshed
+	// when the type changes; hidden when nothing is missing.
+	QLabel *raw_hint = new QLabel;
+	{
+		QFont f = raw_hint->font();
+		f.setItalic(true);
+		raw_hint->setFont(f);
+		raw_hint->setWordWrap(true);
+		QPalette pal = raw_hint->palette();
+		QColor c = pal.color(QPalette::WindowText);
+		c.setAlpha(120);	// lower opacity
+		pal.setColor(QPalette::WindowText, c);
+		raw_hint->setPalette(pal);
+	}
+	auto refresh_raw_hint = [raw_hint, args_ptr, cur_type]() {
+		auto miss = Missing_Template_Args(*cur_type, *args_ptr);
+		if (miss.empty()) {
+			raw_hint->clear();
+			raw_hint->setVisible(false);
+			return;
+		}
+		QStringList parts;
+		for (const auto &kv : miss) {
+			parts << (QString::fromStdString(kv.first) + QStringLiteral("=")
+				+ QString::fromStdString(kv.second));
+		}
+		raw_hint->setText(QStringLiteral("Suggested: ") + parts.join(QStringLiteral(", ")));
+		raw_hint->setVisible(true);
+	};
+
 	// Pretty (key/value grid) view.
 	QWidget *pretty = new QWidget;
 	QVBoxLayout *pretty_layout = new QVBoxLayout(pretty);
 	pretty_layout->setContentsMargins(0, 0, 0, 0);
 	pretty_layout->setSpacing(2);
 
+	// Raw page = the text box plus the dimmed suggestion hint beneath it.
+	QWidget *raw_page = new QWidget;
+	QVBoxLayout *raw_page_layout = new QVBoxLayout(raw_page);
+	raw_page_layout->setContentsMargins(0, 0, 0, 0);
+	raw_page_layout->setSpacing(2);
+	raw_page_layout->addWidget(args_edit);
+	raw_page_layout->addWidget(raw_hint);
+
 	QStackedWidget *args_stack = new QStackedWidget;
-	args_stack->addWidget(args_edit);	// index 0 = raw
+	args_stack->addWidget(raw_page);	// index 0 = raw
 	args_stack->addWidget(pretty);		// index 1 = pretty
 
 	// A QStackedWidget sizes to the LARGEST page, so a tall Table page would keep
@@ -715,7 +821,8 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 
 	// Rebuilds the pretty grid from the current *args string. Each non-empty
 	// "Key=Value" line becomes a row of two line edits; edits rewrite *args.
-	auto rebuild_pretty = [pretty, pretty_layout, args_ptr, args_edit, typing, edit = ctx.edit]() {
+	auto rebuild_pretty = [pretty, pretty_layout, args_ptr, args_edit, typing,
+			cur_type, edit = ctx.edit]() {
 		// Clear existing rows.
 		QLayoutItem *item;
 		while ((item = pretty_layout->takeAt(0)) != nullptr) {
@@ -724,6 +831,8 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 		}
 
 		// Serialize the current field rows back into *args and the raw box.
+		// Ghost (suggestion) rows use objectNames gk/gv and are skipped until
+		// the user edits them (which promotes them to real k/v fields).
 		auto serialize = [pretty_layout, args_ptr, args_edit, typing]() {
 			QString out;
 			for (int i = 0; i < pretty_layout->count(); i++) {
@@ -795,22 +904,77 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 		if (edit) {
 			// A trailing blank row lets the user add a new key/value pair.
 			add_row(QString(), QString());
+
+			// Ghost (suggestion) rows: the selected type's template keys that are
+			// not present yet, shown italic + dimmed. Their fields use gk/gv so
+			// serialize ignores them; editing one promotes it to a real k/v pair.
+			auto missing = Missing_Template_Args(*cur_type, *args_ptr);
+			for (const auto &kv : missing) {
+				QWidget *row = new QWidget;
+				QHBoxLayout *hl = new QHBoxLayout(row);
+				hl->setContentsMargins(0, 0, 0, 0);
+				hl->setSpacing(2);
+				QLineEdit *gk = new QLineEdit(QString::fromStdString(kv.first));
+				gk->setObjectName(QStringLiteral("gk"));
+				QLineEdit *gv = new QLineEdit(QString::fromStdString(kv.second));
+				gv->setObjectName(QStringLiteral("gv"));
+
+				// Italic + lower-opacity styling to read as a suggestion.
+				for (QLineEdit *le : { gk, gv }) {
+					QFont f = le->font();
+					f.setItalic(true);
+					le->setFont(f);
+					QPalette pal = le->palette();
+					QColor c = pal.color(QPalette::Text);
+					c.setAlpha(120);
+					pal.setColor(QPalette::Text, c);
+					le->setPalette(pal);
+				}
+				gk->setToolTip(QStringLiteral("Suggested key for this mapper type — edit to add"));
+				gv->setToolTip(QStringLiteral("Suggested value — edit to add"));
+
+				// Promote to a real row on first edit: solid style + k/v names, so
+				// the next serialize picks it up. Re-serialize to persist.
+				auto promote = [row, gk, gv, serialize]() {
+					gk->setObjectName(QStringLiteral("k"));
+					gv->setObjectName(QStringLiteral("v"));
+					for (QLineEdit *le : { gk, gv }) {
+						QFont f = le->font();
+						f.setItalic(false);
+						le->setFont(f);
+						// Restore full-opacity text from the inherited palette.
+						le->setPalette(QApplication::palette());
+					}
+					serialize();
+				};
+				QObject::connect(gk, &QLineEdit::textEdited, [promote]() { promote(); });
+				QObject::connect(gv, &QLineEdit::textEdited, [promote]() { promote(); });
+
+				hl->addWidget(gk, 1);
+				hl->addWidget(gv, 1);
+				pretty_layout->addWidget(row);
+			}
 		}
 	};
 
 	if (ctx.edit) {
-		QObject::connect(args_edit, &QPlainTextEdit::textChanged, [args_edit, args_ptr, typing]() {
-			*args_ptr = args_edit->toPlainText().toStdString();
-			if (typing) typing();	// coalesced: one undo step per typing burst
-		});
+		QObject::connect(args_edit, &QPlainTextEdit::textChanged,
+			[args_edit, args_ptr, typing, refresh_raw_hint]() {
+				*args_ptr = args_edit->toPlainText().toStdString();
+				refresh_raw_hint();		// a newly typed key drops out of "missing"
+				if (typing) typing();	// coalesced: one undo step per typing burst
+			});
 	}
+	refresh_raw_hint();	// initial suggestion state
 
 	std::function<void(int)> mapping_change;
 	if (ctx.edit) {
 		mapping_change = [material_ptr, mask, shift, dirty, args_edit, args_ptr,
-				rebuild_pretty, pretty_toggle](int value) {
+				rebuild_pretty, pretty_toggle, cur_type, refresh_raw_hint](int value) {
 			material_ptr->attributes = (material_ptr->attributes & ~mask)
 				| (((uint32_t)value << shift) & mask);
+			*cur_type = value;
+
 			// Prefill the arg-key template for the chosen mapper, but only when
 			// the Args box is empty — never clobber args already in the chunk.
 			// Fill with signals blocked so the type change + prefilled args are
@@ -822,10 +986,13 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 					QSignalBlocker block(args_edit);
 					args_edit->setPlainText(QString::fromLatin1(tmpl));
 					*args_ptr = args_edit->toPlainText().toStdString();
-					// Keep the pretty grid in sync if it is the active view.
-					if (pretty_toggle->isChecked()) rebuild_pretty();
 				}
 			}
+			// Refresh both views' suggestion guidance for the new type: the raw
+			// hint line and (if showing) the Table ghost rows. When args already
+			// exist, this shows only the still-missing keys as dimmed suggestions.
+			refresh_raw_hint();
+			if (pretty_toggle->isChecked()) rebuild_pretty();
 			if (dirty) dirty();
 		};
 	}
