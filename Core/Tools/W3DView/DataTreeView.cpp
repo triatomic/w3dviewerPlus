@@ -2663,6 +2663,68 @@ CDataTreeView::OnOpenInMaterialViewer (void)
 
 ////////////////////////////////////////////////////////////////////////////
 //
+//  OpenSelectionInMaterialViewer
+//
+// TheSuperHackers @feature Ctrl+M entry point. A mesh selected in the tree
+// opens the Material Viewer pre-selected to that mesh; any other selection (or
+// none) opens the whole currently displayed object instead.
+//
+void
+CDataTreeView::OpenSelectionInMaterialViewer (void)
+{
+	AssetInfoClass *asset_info = Get_Current_Asset_Info ();
+
+	// A mesh is selected: open that mesh (pre-selected in the panel), mirroring
+	// the right-click "Open in Material Viewer" path.
+	if (asset_info != nullptr && asset_info->Get_Type () == TypeMesh) {
+		const char *name = asset_info->Get_Name ();
+
+		StringClass source_file;
+		CW3DViewDoc *pdoc = (CW3DViewDoc *)GetDocument ();
+		if (pdoc != nullptr) {
+			const HashTemplateClass<StringClass, StringClass> &sourceMap = pdoc->GetAssetSourceFileMap ();
+			StringClass key (name);
+			if (sourceMap.Exists (key)) {
+				source_file = sourceMap.Get (key);
+			}
+		}
+
+		CMaterialViewerFrame::ShowViewerForAsset (name, source_file, name);
+		return;
+	}
+
+	// Otherwise open the whole currently displayed object. Prefer a selected
+	// non-mesh asset's name; fall back to whatever the viewport is showing.
+	CW3DViewDoc *pdoc = (CW3DViewDoc *)GetDocument ();
+	const char *obj_name = nullptr;
+	if (asset_info != nullptr) {
+		obj_name = asset_info->Get_Name ();
+	} else if (pdoc != nullptr && pdoc->GetDisplayedObject () != nullptr) {
+		obj_name = pdoc->GetDisplayedObject ()->Get_Name ();
+	}
+
+	if (obj_name == nullptr || obj_name[0] == '\0') {
+		// Nothing to show a model for: just open the viewer empty.
+		CMaterialViewerFrame::ShowViewer ();
+		return;
+	}
+
+	StringClass source_file;
+	if (pdoc != nullptr) {
+		const HashTemplateClass<StringClass, StringClass> &sourceMap = pdoc->GetAssetSourceFileMap ();
+		StringClass key (obj_name);
+		if (sourceMap.Exists (key)) {
+			source_file = sourceMap.Get (key);
+		}
+	}
+
+	// No mesh name -> the panel shows the whole object.
+	CMaterialViewerFrame::ShowViewerForAsset (obj_name, source_file, nullptr);
+}
+
+
+////////////////////////////////////////////////////////////////////////////
+//
 //  Build_Render_Object_List
 //
 void

@@ -206,7 +206,7 @@ BEGIN
         MENUITEM "&Open...\tCtrl+O",            ID_FILE_OPEN
         MENUITEM "Open &Folder...\tCtrl+Shift+O", ID_FILE_OPEN_FOLDER
         MENUITEM SEPARATOR
-        MENUITEM "Material &Viewer...",         IDM_MATERIAL_VIEWER
+        MENUITEM "Material &Viewer...\tCtrl+M",  IDM_MATERIAL_VIEWER
         MENUITEM SEPARATOR
         MENUITEM "&Munge Sort on Load",         IDM_MUNGE_SORT_ON_LOAD
         MENUITEM "&Enable Gamma Correction",    IDM_ENABLE_GAMMA_CORRECTION
@@ -385,7 +385,7 @@ BEGIN
         MENUITEM "&Left\tCtrl+L",               IDM_CAMERA_LEFT
         MENUITEM "&Right\tCtrl+R",              IDM_CAMERA_RIGHT
         MENUITEM "&Top\tCtrl+T",                IDM_CAMERA_TOP
-        MENUITEM "Bo&ttom\tCtrl+M",             IDM_CAMERA_BOTTOM
+        MENUITEM "Bo&ttom\tCtrl+Shift+M",       IDM_CAMERA_BOTTOM
         MENUITEM SEPARATOR
         MENUITEM "Rotate &X Only",              IDM_CAMERA_ALLOW_ROTATE_X
         MENUITEM "Rotate &Y Only",              IDM_CAMERA_ALLOW_ROTATE_Y
@@ -540,7 +540,8 @@ BEGIN
     "F",            IDM_CAMERA_FRONT,       VIRTKEY, CONTROL, NOINVERT
     "F",            IDM_BACKGROUND_FOG,     VIRTKEY, CONTROL, ALT, NOINVERT
     "L",            IDM_CAMERA_LEFT,        VIRTKEY, CONTROL, NOINVERT
-    "M",            IDM_CAMERA_BOTTOM,      VIRTKEY, CONTROL, NOINVERT
+    "M",            IDM_MATERIAL_VIEWER,    VIRTKEY, CONTROL, NOINVERT
+    "M",            IDM_CAMERA_BOTTOM,      VIRTKEY, SHIFT, CONTROL, NOINVERT
     "N",            ID_FILE_NEW,            VIRTKEY, CONTROL, NOINVERT
     "O",            ID_FILE_OPEN,           VIRTKEY, CONTROL, NOINVERT
     "O",            ID_FILE_OPEN_FOLDER,    VIRTKEY, SHIFT, CONTROL, NOINVERT

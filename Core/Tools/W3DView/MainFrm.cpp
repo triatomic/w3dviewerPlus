@@ -5574,10 +5574,17 @@ LRESULT CMainFrame::OnSettingChangeRaw(WPARAM wParam, LPARAM lParam)
 	return Default();
 }
 
-// TheSuperHackers @feature W3D Material Viewer window.
+// TheSuperHackers @feature W3D Material Viewer window. Context-aware (Ctrl+M):
+// a mesh selected in the asset tree opens pre-selected to that mesh; anything
+// else opens the whole currently displayed object.
 void CMainFrame::OnMaterialViewer()
 {
-	CMaterialViewerFrame::ShowViewer();
+	CDataTreeView *pCDataTreeView = (CDataTreeView *)m_wndSplitter.GetPane (0, 0);
+	if (pCDataTreeView != nullptr) {
+		pCDataTreeView->OpenSelectionInMaterialViewer ();
+	} else {
+		CMaterialViewerFrame::ShowViewer ();
+	}
 }
 
 // TheSuperHackers @feature F5: viewport refresh. Re-runs the exact path a

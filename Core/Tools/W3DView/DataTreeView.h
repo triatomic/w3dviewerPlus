@@ -131,6 +131,11 @@ protected:
 		//
 		RenderObjClass *	Get_Current_Render_Obj (void) const;
 		AssetInfoClass *	Get_Current_Asset_Info (void) const;
+
+		// Opens the Material Viewer for the current tree selection: a selected
+		// mesh opens pre-selected to that mesh; any other (or no) selection opens
+		// the whole currently displayed object. Used by the Ctrl+M hotkey.
+		void					OpenSelectionInMaterialViewer (void);
 		LPCTSTR				GetCurrentSelectionName (void);
 		ASSET_TYPE			GetCurrentSelectionType (void);
 		HTREEITEM			FindChildItem (HTREEITEM hParentItem, LPCTSTR pszChildItemName);
