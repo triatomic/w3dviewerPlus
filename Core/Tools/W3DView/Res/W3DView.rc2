@@ -1,0 +1,18 @@
+//
+// W3DVIEW.RC2 - resources Microsoft Visual C++ does not edit directly
+//
+
+#ifdef APSTUDIO_INVOKED
+	#error this file is not editable by Microsoft Visual C++
+#endif //APSTUDIO_INVOKED
+
+
+/////////////////////////////////////////////////////////////////////////////
+// Add manually edited resources here...
+
+// TheSuperHackers @build Use comctl32 v6 to enable modern Windows visual styles
+// CREATEPROCESS_MANIFEST_RESOURCE_ID (1) tells Windows to activate this context
+// when the process is created, enabling Fluent/Win11 styled controls.
+1 RT_MANIFEST "res\\W3DView.manifest"
+
+/////////////////////////////////////////////////////////////////////////////
