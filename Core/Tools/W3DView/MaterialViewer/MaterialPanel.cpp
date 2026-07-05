@@ -160,8 +160,8 @@ const char *const MAPPER_ARG_TEMPLATES[] = {
 	"",																// 5  Silhouette (no parser)
 	"UScale=1.0\nVScale=1.0",										// 6  Scale
 	"FPS=1.0\nLog2Width=0\nLast=0",									// 7  Grid
-	"Speed=0.0\nUCenter=0.0\nVCenter=0.0\nUScale=1.0\nVScale=1.0",	// 8  Rotate
-	"UAmp=0.0\nUFreq=0.0\nUPhase=0.0\nVAmp=0.0\nVFreq=0.0\nVPhase=0.0",	// 9  Sine
+	"Speed=0.1\nUCenter=0.0\nVCenter=0.0\nUScale=1.0\nVScale=1.0",	// 8  Rotate
+	"UAmp=1.0\nUFreq=1.0\nUPhase=0.0\nVAmp=1.0\nVFreq=1.0\nVPhase=0.0",	// 9  Sine
 	"UStep=0.0\nVStep=0.0\nSPS=0.0",								// 10 Step
 	"UPerSec=0.0\nVPerSec=0.0\nPeriod=0.0",							// 11 ZigZag
 	"",																// 12 WS Classic Env
