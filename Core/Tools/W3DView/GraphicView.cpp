@@ -596,7 +596,7 @@ CGraphicView::CGraphicView (void)
 		m_CameraBonePosX (false),
 		m_UpdateCounter (0),
       m_allowedCameraRotation (FreeRotation),
-		m_InvertCameraY (false),
+		m_InvertCameraY (true),
 		m_ObjectCenter (0.0f, 0.0f, 0.0f)
 {
     // Get the windowed mode from the registry
@@ -604,7 +604,8 @@ CGraphicView::CGraphicView (void)
 	 m_iWindowed = ::atoi ((LPCTSTR)string_windowed);
 
 	 // Restore the persisted "invert vertical camera movement" preference.
-	 m_InvertCameraY = (theApp.GetProfileInt ("Config", "InvertCameraY", 0) != 0);
+	 // Default ON (1) for a fresh profile — inverted vertical is the expected feel.
+	 m_InvertCameraY = (theApp.GetProfileInt ("Config", "InvertCameraY", 1) != 0);
     return ;
 }
 
