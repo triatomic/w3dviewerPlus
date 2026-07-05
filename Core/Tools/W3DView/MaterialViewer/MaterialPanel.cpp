@@ -44,6 +44,7 @@
 #include <QtGui/QPainter>
 #include <QtGui/QPen>
 #include <QtGui/QPixmap>
+#include <QtWidgets/QAbstractItemView>
 #include <QtWidgets/QAction>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QButtonGroup>
@@ -156,6 +157,38 @@ protected:
 		return QObject::eventFilter(object, event);
 	}
 };
+
+// Restores the status strip to a combo's own help when its popup closes, so a
+// hover-highlighted option description does not outlive the popup (Esc close,
+// click-away). Installed on the popup view by Wire_Option_Hover_Help. No moc:
+// eventFilter is a plain virtual override.
+class ComboPopupHelpFilter : public QObject
+{
+public:
+	explicit ComboPopupHelpFilter(QComboBox *combo) : QObject(combo), m_Combo(combo) {}
+
+protected:
+	bool eventFilter(QObject *object, QEvent *event) override
+	{
+		if (event->type() == QEvent::Hide) {
+			Show_Help(m_Combo->statusTip());
+		}
+		return QObject::eventFilter(object, event);
+	}
+
+private:
+	QComboBox *m_Combo;
+};
+
+// Shows each option's description in the status strip while the popup is open
+// and the mouse (or arrow keys) highlights it. `help_for` maps an option index
+// to its help text.
+void Wire_Option_Hover_Help(QComboBox *combo, std::function<QString(int)> help_for)
+{
+	QObject::connect(combo, QOverload<int>::of(&QComboBox::highlighted),
+		[help_for](int value) { Show_Help(help_for(value)); });
+	combo->view()->installEventFilter(new ComboPopupHelpFilter(combo));
+}
 
 //////////////////////////////////////////////////////////////////////////////
 //	Painted glyph icons (Qt5's SP_Dialog* standard icons are empty pixmaps on
@@ -429,6 +462,16 @@ static QString Mapping_Type_Help(int mappingType)
 	return QString::fromLatin1(desc);
 }
 
+// Same idea for any combo with a parallel per-value description table: the
+// selected value's description when one exists, else the field's generic help.
+static QString Option_Help(const char *generic, const char *const *descs, int count, int value)
+{
+	if (value < 0 || value >= count || descs[value][0] == '\0') {
+		return QString::fromLatin1(generic);
+	}
+	return QString::fromLatin1(descs[value]);
+}
+
 // Tracks the active theme so popups opened from the panel (the swatch color
 // dialog) can request a dark titlebar via DWM.
 bool g_DarkTheme = false;
@@ -494,6 +537,57 @@ const char *const DETAIL_COLOR[] = {
 };
 
 const char *const DETAIL_ALPHA[] = { "Disable", "Detail", "Scale", "InvScale" };
+
+// Per-value descriptions for the Shader tab's Advanced combos, surfaced in the
+// status strip when a value is selected (same pattern as MAPPING_TYPE_DESCS).
+// Semantics from ShaderClass in shader.h; "detail" is the stage-1 texture.
+const char *const DEPTH_COMPARE_DESCS[] = {
+	"Never draws the pixel.",
+	"Draws the pixel only when it is closer than the Z buffer.",
+	"Draws the pixel only when its depth equals the Z buffer.",
+	"Draws the pixel when it is closer than or equal to the Z buffer (default).",
+	"Draws the pixel only when it is farther than the Z buffer.",
+	"Draws the pixel only when its depth differs from the Z buffer.",
+	"Draws the pixel when it is farther than or equal to the Z buffer.",
+	"Always draws the pixel, ignoring the Z buffer.",
+};
+
+const char *const PRI_GRADIENT_DESCS[] = {
+	"Ignores lighting: the texture is drawn unlit (like a decal).",
+	"Multiplies the pixel by the lighting color and alpha (default).",
+	"Adds the lighting RGB to the pixel; the lighting alpha replaces the pixel alpha.",
+	"Environment-mapped bump mapping.",
+	"Environment-mapped bump mapping with luminance control.",
+	"Multiplies the pixel by the lighting, then doubles the RGB (over-brightens).",
+};
+
+const char *const SEC_GRADIENT_DESCS[] = {
+	"No specular highlights are drawn (default).",
+	"Adds the specular lighting RGB on top of the pixel.",
+};
+
+const char *const DETAIL_COLOR_DESCS[] = {
+	"Detail texture color is ignored; the base color is used as is (default).",
+	"Replaces the base color with the detail texture's color.",
+	"Multiplies the base color by the detail color.",
+	"Inverse multiply: base + (1 - base) * detail; brightens without clipping.",
+	"Adds the detail color to the base color.",
+	"Subtracts the detail color from the base color.",
+	"Subtracts the base color from the detail color.",
+	"Blends base and detail using the base alpha: base*A + detail*(1-A).",
+	"Blends base and detail using the detail alpha: base*A + detail*(1-A).",
+	"Adds the colors and subtracts 0.5 (signed add).",
+	"Adds the colors, subtracts 0.5, then doubles the result.",
+	"Multiplies the colors, then doubles the result.",
+	"Base + base alpha * detail (modulate alpha, add color).",
+};
+
+const char *const DETAIL_ALPHA_DESCS[] = {
+	"Detail texture alpha is ignored; the base alpha is used as is (default).",
+	"Replaces the base alpha with the detail texture's alpha.",
+	"Multiplies the base alpha by the detail alpha.",
+	"Inverse multiply: base + (1 - base) * detail; raises alpha without clipping.",
+};
 
 const char *const BLEND_MODES[] = {
 	"Opaque", "Add", "Multiply", "Multiply and Add", "Screen",
@@ -594,6 +688,42 @@ QComboBox *Make_Combo(const char *const (&table)[N], int index,
 	} else {
 		Make_Read_Only(combo);
 	}
+	return combo;
+}
+
+// A Make_Combo whose status-strip help tracks the selected value's description
+// (from a parallel `descs` table, falling back to `generic`). In edit mode the
+// selection is stored into `field` and the strip refreshes immediately — the
+// combo keeps focus, so the hover/focus filter would not re-fire on its own.
+// The combo pointer lives in a heap holder captured by value because the
+// change lambda runs long after this function returns.
+template<int N>
+QComboBox *Make_Described_Combo(const char *const (&table)[N],
+	const char *const (&descs)[N], const char *generic,
+	int index, uint8_t *field, bool edit, ChangeFn dirty)
+{
+	const char *const *desc_table = descs;
+	auto holder = std::make_shared<QComboBox *>(nullptr);
+
+	std::function<void(int)> on_change;
+	if (edit) {
+		on_change = [field, dirty, desc_table, generic, holder](int value) {
+			*field = (uint8_t)value;
+			QString tip = Option_Help(generic, desc_table, N, value);
+			if (*holder != nullptr) {
+				Set_Help(*holder, tip);
+			}
+			Show_Help(tip);
+			if (dirty) dirty();
+		};
+	}
+
+	QComboBox *combo = Make_Combo(table, index, on_change);
+	*holder = combo;
+	Set_Help(combo, Option_Help(generic, desc_table, N, index));
+	Wire_Option_Hover_Help(combo, [desc_table, generic](int value) {
+		return Option_Help(generic, desc_table, N, value);
+	});
 	return combo;
 }
 
@@ -1208,6 +1338,7 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 	QComboBox *type_combo = Make_Combo(MAPPING_TYPES, mapping, mapping_change);
 	*type_combo_holder = type_combo;
 	Set_Help(type_combo, Mapping_Type_Help(mapping));
+	Wire_Option_Hover_Help(type_combo, [](int value) { return Mapping_Type_Help(value); });
 	form->addRow(QStringLiteral("Type:"), type_combo);
 
 	// Wire the Pretty button (Raw is its exclusive twin). Selecting Pretty
@@ -1435,36 +1566,21 @@ QWidget *Build_Shader_Tab(const EditCtx &ctx, MeshMaterialData &mesh, const Pass
 
 	QGroupBox *advanced_group = new QGroupBox(QStringLiteral("Advanced"));
 	QFormLayout *advanced_form = new QFormLayout(advanced_group);
-	QComboBox *pri_grad = Make_Combo(PRI_GRADIENT, shader.priGradient,
-		edit ? std::function<void(int)>([shader_ptr, dirty](int v) {
-			shader_ptr->priGradient = (uint8_t)v; if (dirty) dirty();
-		}) : std::function<void(int)>());
-	Set_Help(pri_grad, QString::fromLatin1(Help::PRI_GRAD));
-	advanced_form->addRow(QStringLiteral("Pri Gradient:"), pri_grad);
-	QComboBox *sec_grad = Make_Combo(SEC_GRADIENT, shader.secGradient,
-		edit ? std::function<void(int)>([shader_ptr, dirty](int v) {
-			shader_ptr->secGradient = (uint8_t)v; if (dirty) dirty();
-		}) : std::function<void(int)>());
-	Set_Help(sec_grad, QString::fromLatin1(Help::SEC_GRAD));
-	advanced_form->addRow(QStringLiteral("Sec Gradient:"), sec_grad);
-	QComboBox *depth_cmp = Make_Combo(DEPTH_COMPARE, shader.depthCompare,
-		edit ? std::function<void(int)>([shader_ptr, dirty](int v) {
-			shader_ptr->depthCompare = (uint8_t)v; if (dirty) dirty();
-		}) : std::function<void(int)>());
-	Set_Help(depth_cmp, QString::fromLatin1(Help::DEPTH_CMP));
-	advanced_form->addRow(QStringLiteral("Depth Cmp:"), depth_cmp);
-	QComboBox *detail_clr = Make_Combo(DETAIL_COLOR, shader.detailColorFunc,
-		edit ? std::function<void(int)>([shader_ptr, dirty](int v) {
-			shader_ptr->detailColorFunc = (uint8_t)v; if (dirty) dirty();
-		}) : std::function<void(int)>());
-	Set_Help(detail_clr, QString::fromLatin1(Help::DETAIL_CLR));
-	advanced_form->addRow(QStringLiteral("Detail Colour:"), detail_clr);
-	QComboBox *detail_alpha = Make_Combo(DETAIL_ALPHA, shader.detailAlphaFunc,
-		edit ? std::function<void(int)>([shader_ptr, dirty](int v) {
-			shader_ptr->detailAlphaFunc = (uint8_t)v; if (dirty) dirty();
-		}) : std::function<void(int)>());
-	Set_Help(detail_alpha, QString::fromLatin1(Help::DETAIL_ALPHA));
-	advanced_form->addRow(QStringLiteral("Detail Alpha:"), detail_alpha);
+	advanced_form->addRow(QStringLiteral("Pri Gradient:"),
+		Make_Described_Combo(PRI_GRADIENT, PRI_GRADIENT_DESCS, Help::PRI_GRAD,
+			shader.priGradient, &shader_ptr->priGradient, edit, dirty));
+	advanced_form->addRow(QStringLiteral("Sec Gradient:"),
+		Make_Described_Combo(SEC_GRADIENT, SEC_GRADIENT_DESCS, Help::SEC_GRAD,
+			shader.secGradient, &shader_ptr->secGradient, edit, dirty));
+	advanced_form->addRow(QStringLiteral("Depth Cmp:"),
+		Make_Described_Combo(DEPTH_COMPARE, DEPTH_COMPARE_DESCS, Help::DEPTH_CMP,
+			shader.depthCompare, &shader_ptr->depthCompare, edit, dirty));
+	advanced_form->addRow(QStringLiteral("Detail Colour:"),
+		Make_Described_Combo(DETAIL_COLOR, DETAIL_COLOR_DESCS, Help::DETAIL_CLR,
+			shader.detailColorFunc, &shader_ptr->detailColorFunc, edit, dirty));
+	advanced_form->addRow(QStringLiteral("Detail Alpha:"),
+		Make_Described_Combo(DETAIL_ALPHA, DETAIL_ALPHA_DESCS, Help::DETAIL_ALPHA,
+			shader.detailAlphaFunc, &shader_ptr->detailAlphaFunc, edit, dirty));
 	layout->addWidget(advanced_group);
 	layout->addStretch(1);
 	return tab;
