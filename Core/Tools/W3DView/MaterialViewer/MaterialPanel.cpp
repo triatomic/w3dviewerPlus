@@ -33,10 +33,16 @@
 
 #include <QtCore/QEvent>
 #include <QtCore/QFileInfo>
+#include <QtCore/QPointF>
+#include <QtCore/QSize>
 #include <QtGui/QClipboard>
+#include <QtGui/QColor>
+#include <QtGui/QIcon>
 #include <QtGui/QImage>
 #include <QtGui/QKeySequence>
 #include <QtGui/QMouseEvent>
+#include <QtGui/QPainter>
+#include <QtGui/QPen>
 #include <QtGui/QPixmap>
 #include <QtWidgets/QAction>
 #include <QtWidgets/QApplication>
@@ -61,6 +67,7 @@
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QSpinBox>
 #include <QtWidgets/QStackedWidget>
+#include <QtWidgets/QStyle>
 #include <QtWidgets/QStyleFactory>
 #include <QtWidgets/QTabWidget>
 #include <QtWidgets/QToolButton>
@@ -142,6 +149,41 @@ protected:
 		return QObject::eventFilter(object, event);
 	}
 };
+
+//////////////////////////////////////////////////////////////////////////////
+//	Painted glyph icons (Qt5's SP_Dialog* standard icons are empty pixmaps on
+//	the Windows style, so the +/x buttons would render blank). These paint a
+//	crisp, DPI-aware glyph in the requested color and follow the theme.
+//////////////////////////////////////////////////////////////////////////////
+
+// Paints a QIcon at the given logical size for the current device pixel ratio.
+// `glyph`: 0 = plus (+), 1 = cross (x). `color` is the stroke color.
+QIcon Make_Glyph_Icon(int glyph, const QColor &color, int size = 12)
+{
+	const qreal dpr = qApp ? qApp->devicePixelRatio() : 1.0;
+	QPixmap pm(QSize(size, size) * dpr);
+	pm.setDevicePixelRatio(dpr);
+	pm.fill(Qt::transparent);
+
+	QPainter p(&pm);
+	p.setRenderHint(QPainter::Antialiasing, true);
+	QPen pen(color);
+	pen.setWidthF(size / 8.0);				// scales with icon size
+	pen.setCapStyle(Qt::RoundCap);
+	p.setPen(pen);
+
+	const qreal m = size * 0.22;				// inset margin
+	const qreal lo = m, hi = size - m, mid = size / 2.0;
+	if (glyph == 0) {						// plus
+		p.drawLine(QPointF(mid, lo), QPointF(mid, hi));
+		p.drawLine(QPointF(lo, mid), QPointF(hi, mid));
+	} else {								// cross
+		p.drawLine(QPointF(lo, lo), QPointF(hi, hi));
+		p.drawLine(QPointF(hi, lo), QPointF(lo, hi));
+	}
+	p.end();
+	return QIcon(pm);
+}
 
 //////////////////////////////////////////////////////////////////////////////
 //	Mapper arg-key templates (per mapping type), from the OpenW3D docs
@@ -983,7 +1025,9 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 			hl->addWidget(v, 1);
 			if (edit) {
 				QToolButton *del = new QToolButton;
-				del->setText(QString(QChar(0x00D7)));	// multiplication sign 'x'
+				del->setIcon(Make_Glyph_Icon(1,	// cross
+					QApplication::palette().color(QPalette::WindowText)));
+				del->setIconSize(QSize(12, 12));
 				del->setObjectName(QStringLiteral("del"));
 				del->setFixedSize(18, 18);
 				del->setAutoRaise(true);
@@ -1027,7 +1071,9 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 				// real key/value row (added to the args). Declared first so it can
 				// be captured by commit_ghost and hidden once promoted.
 				QToolButton *add = new QToolButton;
-				add->setText(QStringLiteral("+"));
+				add->setIcon(Make_Glyph_Icon(0,	// plus
+					QApplication::palette().color(QPalette::WindowText)));
+				add->setIconSize(QSize(12, 12));
 				add->setObjectName(QStringLiteral("add"));
 				add->setFixedSize(18, 18);
 				add->setAutoRaise(true);
