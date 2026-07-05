@@ -326,7 +326,7 @@ static const char *Mapper_Arg_Help(const std::string &key)
 // Text is sourced from the engine mapper spec, MAPPERS.TXT. An empty string
 // falls back to the generic Mapping Type help.
 const char *const MAPPING_TYPE_DESCS[] = {
-	"",																// 0  UV
+	"Uses the mesh's own UV coordinates directly, with no transformation.",	// 0  UV
 	"Uses the reflection direction to look up the environment map.",	// 1  Environment
 	"Uses the surface normals to look up the environment map.",		// 2  Classic Environment
 	"Uses the screen coordinate as the UV coordinate.",				// 3  Screen
