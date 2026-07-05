@@ -234,6 +234,80 @@ Missing_Template_Args(int mappingType, const std::string &currentArgs)
 	return missing;
 }
 
+// Per-key help for mapper args, surfaced in the status strip when a Table-mode
+// row is hovered/focused. Text is sourced from the engine mapper spec,
+// Core/Libraries/Source/WWVegas/WW3D2/MAPPERS.TXT. Match is case-insensitive;
+// returns nullptr for unknown keys (leaves the status strip on the generic Args
+// help). Keys shared across mappers (UPerSec, UScale, FPS...) describe once.
+static const char *Mapper_Arg_Help(const std::string &key)
+{
+	std::string k = key;
+	while (!k.empty() && (k.front() == ' ' || k.front() == '\t')) k.erase(k.begin());
+	while (!k.empty() && (k.back() == ' ' || k.back() == '\t' || k.back() == '\r')) k.pop_back();
+	for (char &c : k) c = (char)tolower((unsigned char)c);
+
+	struct Entry { const char *key; const char *help; };
+	static const Entry TABLE[] = {
+		{ "upersec",      "UPerSec: U-coordinate scroll speed in units per second." },
+		{ "vpersec",      "VPerSec: V-coordinate scroll speed in units per second." },
+		{ "uscale",       "UScale: scale factor applied to the U texture coordinate." },
+		{ "vscale",       "VScale: scale factor applied to the V texture coordinate." },
+		{ "fps",          "FPS: animation rate in frames per second." },
+		{ "log2width",    "Log2Width: grid subdivision as a power of two (0 = 1 wide, 1 = 2, 2 = 4...); default divides the texture into quarters." },
+		{ "last",         "Last: last grid frame to use (default = GridWidth * GridWidth)." },
+		{ "speed",        "Speed: rotation rate in Hertz (1 = one rotation per second)." },
+		{ "ucenter",      "UCenter: U coordinate of the center of rotation." },
+		{ "vcenter",      "VCenter: V coordinate of the center of rotation." },
+		{ "uamp",         "UAmp: amplitude of the U sine offset (Lissajous figure)." },
+		{ "ufreq",        "UFreq: frequency of the U sine offset." },
+		{ "uphase",       "UPhase: phase of the U sine offset." },
+		{ "vamp",         "VAmp: amplitude of the V sine offset (Lissajous figure)." },
+		{ "vfreq",        "VFreq: frequency of the V sine offset." },
+		{ "vphase",       "VPhase: phase of the V sine offset." },
+		{ "ustep",        "UStep: discrete U offset applied per step." },
+		{ "vstep",        "VStep: discrete V offset applied per step." },
+		{ "sps",          "SPS: steps per second." },
+		{ "period",       "Period: time in seconds to complete one zigzag." },
+		{ "usereflect",   "UseReflect: TRUE uses the reflection vector, FALSE the normal, to access the U coordinate." },
+		{ "vstart",       "VStart: starting V coordinate for the Edge mapper." },
+		{ "bumprotation", "BumpRotation: bump-matrix rotation rate in Hertz (1 = one rotation per second)." },
+		{ "bumpscale",    "BumpScale: scale factor applied to the bumps." },
+	};
+	for (const Entry &e : TABLE) {
+		if (k == e.key) return e.help;
+	}
+	return nullptr;
+}
+
+// Per-type description for the Mapping Type combo, surfaced in the status strip
+// when a type is selected. Index matches MAPPING_TYPES / MAPPER_ARG_TEMPLATES.
+// Text is sourced from the engine mapper spec, MAPPERS.TXT. An empty string
+// falls back to the generic Mapping Type help.
+const char *const MAPPING_TYPE_DESCS[] = {
+	"",																// 0  UV
+	"Uses the reflection direction to look up the environment map.",	// 1  Environment
+	"Uses the surface normals to look up the environment map.",		// 2  Classic Environment
+	"Uses the screen coordinate as the UV coordinate.",				// 3  Screen
+	"Scrolls the texture at the speed specified.",					// 4  Linear Offset
+	"Obsolete, not supported.",										// 5  Silhouette
+	"Scales the UV coordinates. Useful for detail mapping.",		// 6  Scale
+	"Animates a grid-divided texture left-to-right, top-to-bottom (like reading text). The grid must divide evenly.",	// 7  Grid
+	"Rotates the texture counterclockwise about a center, then scales it.",	// 8  Rotate
+	"Moves the texture in the shape of a Lissajous figure.",		// 9  Sine
+	"Like Linear Offset, but moves in discrete steps.",				// 10 Step
+	"Like Linear Offset, but reverses direction periodically.",		// 11 ZigZag
+	"World-space normal environment map.",							// 12 WS Classic Env
+	"World-space reflection environment map.",						// 13 WS Environment
+	"Animated normal environment map.",								// 14 Grid Classic Env
+	"Animated reflection environment map.",							// 15 Grid Environment
+	"Randomly rotates and translates a texture with linear offset.",	// 16 Random
+	"Uses the Z of the reflection/normal vector for the U coordinate; V is linear offset.",	// 17 Edge
+	"Sets up (and can animate) the bump matrix; also has Linear Offset features. Use this even for a static bump matrix so it initializes to identity.",	// 18 Bump Env
+	"Grid-animated world-space normal environment map.",			// 19 Grid WS Classic Env
+	"Grid-animated world-space reflection environment map.",		// 20 Grid WS Env
+};
+
+
 //////////////////////////////////////////////////////////////////////////////
 //	Field help text (source: W3D Hub 3ds Max tools documentation)
 //////////////////////////////////////////////////////////////////////////////
@@ -287,6 +361,22 @@ namespace Help
 	const char *const TEX_FPS      = "FPS: frame rate for the animated frames.";
 	const char *const TEX_ANIM     = "Anim Mode: playback of the animated frames (Loop / Ping-Pong / Once / Manual).";
 	const char *const TEX_HINT     = "Pass Hint: what the texture is for (Base / Emissive Light Map / Environment Map / Shinyness Map).";
+}
+
+// Returns the combined "generic + per-type" help for a mapping type, for the
+// Mapping Type combo status tip. Falls back to just the generic help.
+static QString Mapping_Type_Help(int mappingType)
+{
+	QString generic = QString::fromLatin1(Help::MAPPING_TYPE);
+	if (mappingType < 0
+			|| mappingType >= (int)(sizeof(MAPPING_TYPE_DESCS) / sizeof(MAPPING_TYPE_DESCS[0]))) {
+		return generic;
+	}
+	const char *desc = MAPPING_TYPE_DESCS[mappingType];
+	if (desc[0] == '\0') {
+		return generic;
+	}
+	return generic + QStringLiteral("  ") + QString::fromLatin1(desc);
 }
 
 // Tracks the active theme so popups opened from the panel (the swatch color
@@ -852,8 +942,18 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 			if (typing) typing();
 		};
 
+		// Points a Key / Value cell pair's status tip at the per-key mapper help
+		// (from MAPPERS.TXT), so hovering or focusing the row surfaces it in the
+		// status strip. Re-called on key edits so the help tracks the typed key.
+		auto apply_key_help = [](QLineEdit *k, QLineEdit *v) {
+			const char *help = Mapper_Arg_Help(k->text().toStdString());
+			QString tip = help ? QString::fromLatin1(help) : QString::fromLatin1(Help::MAPPER_ARGS);
+			k->setStatusTip(tip);
+			if (v) v->setStatusTip(tip);
+		};
+
 		// One editable Key / Value row, with a delete (x) button in edit mode.
-		auto add_row = [pretty, pretty_layout, edit, serialize](const QString &key, const QString &value) {
+		auto add_row = [pretty, pretty_layout, edit, serialize, apply_key_help](const QString &key, const QString &value) {
 			QWidget *row = new QWidget;
 			QHBoxLayout *hl = new QHBoxLayout(row);
 			hl->setContentsMargins(0, 0, 0, 0);
@@ -866,9 +966,11 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 			v->setPlaceholderText(QStringLiteral("Value"));
 			k->setReadOnly(!edit);
 			v->setReadOnly(!edit);
+			apply_key_help(k, v);
 			if (edit) {
 				QObject::connect(k, &QLineEdit::textChanged, [serialize]() { serialize(); });
 				QObject::connect(v, &QLineEdit::textChanged, [serialize]() { serialize(); });
+				QObject::connect(k, &QLineEdit::textChanged, [k, v, apply_key_help]() { apply_key_help(k, v); });
 			}
 			hl->addWidget(k, 1);
 			hl->addWidget(v, 1);
@@ -932,6 +1034,7 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 				}
 				gk->setToolTip(QStringLiteral("Suggested key for this mapper type — edit to add"));
 				gv->setToolTip(QStringLiteral("Suggested value — edit to add"));
+				apply_key_help(gk, gv);
 
 				// Promote to a real row (solid style + k/v names, then serialize)
 				// only when the user commits the edit by leaving the field — Tab
@@ -955,6 +1058,7 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 				};
 				QObject::connect(gk, &QLineEdit::textEdited, [touched]() { *touched = true; });
 				QObject::connect(gv, &QLineEdit::textEdited, [touched]() { *touched = true; });
+				QObject::connect(gk, &QLineEdit::textChanged, [gk, gv, apply_key_help]() { apply_key_help(gk, gv); });
 				QObject::connect(gk, &QLineEdit::editingFinished, [promote]() { promote(); });
 				QObject::connect(gv, &QLineEdit::editingFinished, [promote]() { promote(); });
 				// Once promoted (objectName == k), edits serialize live like any
@@ -983,13 +1087,27 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 	}
 	refresh_raw_hint();	// initial suggestion state
 
+	// Holder so mapping_change (defined before the combo exists) can refresh the
+	// combo's status tip with the newly selected type's description.
+	auto type_combo_holder = std::make_shared<QComboBox *>(nullptr);
+
 	std::function<void(int)> mapping_change;
 	if (ctx.edit) {
 		mapping_change = [material_ptr, mask, shift, dirty, args_edit, args_ptr,
-				rebuild_pretty, pretty_toggle, cur_type, refresh_raw_hint](int value) {
+				rebuild_pretty, pretty_toggle, cur_type, refresh_raw_hint,
+				type_combo_holder](int value) {
 			material_ptr->attributes = (material_ptr->attributes & ~mask)
 				| (((uint32_t)value << shift) & mask);
 			*cur_type = value;
+
+			// Update the combo's status help to the new type's description, and
+			// push it to the strip now (the combo already has focus, so the
+			// hover/focus filter won't re-fire on its own).
+			if (*type_combo_holder != nullptr) {
+				QString tip = Mapping_Type_Help(value);
+				Set_Help(*type_combo_holder, tip);
+				Show_Help(tip);
+			}
 
 			// Prefill the arg-key template for the chosen mapper, but only when
 			// the Args box is empty — never clobber args already in the chunk.
@@ -1013,7 +1131,8 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 		};
 	}
 	QComboBox *type_combo = Make_Combo(MAPPING_TYPES, mapping, mapping_change);
-	Set_Help(type_combo, QString::fromLatin1(Help::MAPPING_TYPE));
+	*type_combo_holder = type_combo;
+	Set_Help(type_combo, Mapping_Type_Help(mapping));
 	form->addRow(QStringLiteral("Type:"), type_combo);
 
 	// Wire the Pretty button (Raw is its exclusive twin). Selecting Pretty
