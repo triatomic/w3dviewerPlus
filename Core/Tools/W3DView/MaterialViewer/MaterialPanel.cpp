@@ -405,8 +405,9 @@ namespace Help
 	const char *const TEX_HINT     = "Pass Hint: what the texture is for (Base / Emissive Light Map / Environment Map / Shinyness Map).";
 }
 
-// Returns the combined "generic + per-type" help for a mapping type, for the
-// Mapping Type combo status tip. Falls back to just the generic help.
+// Returns the status-tip help for a mapping type: the per-type description when
+// one exists (what the selected mapper does), else the generic help. The two are
+// not concatenated — the specific description already implies the generic point.
 static QString Mapping_Type_Help(int mappingType)
 {
 	QString generic = QString::fromLatin1(Help::MAPPING_TYPE);
@@ -418,7 +419,7 @@ static QString Mapping_Type_Help(int mappingType)
 	if (desc[0] == '\0') {
 		return generic;
 	}
-	return generic + QStringLiteral("  ") + QString::fromLatin1(desc);
+	return QString::fromLatin1(desc);
 }
 
 // Tracks the active theme so popups opened from the panel (the swatch color
