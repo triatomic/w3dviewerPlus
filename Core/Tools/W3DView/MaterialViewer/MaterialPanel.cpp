@@ -653,8 +653,8 @@ ColorSwatchWidget *Make_Color_Swatch(const uint8_t rgb[3],
 	palette.setColor(QPalette::Window, QColor(rgb[0], rgb[1], rgb[2]));
 	swatch->setPalette(palette);
 	swatch->setCursor(Qt::PointingHandCursor);
-	QString tip = QStringLiteral("RGB (%1, %2, %3) — click to inspect/copy")
-		.arg(rgb[0]).arg(rgb[1]).arg(rgb[2]);
+	QString tip = QStringLiteral("RGB (%1, %2, %3) %4 click to inspect/copy")
+		.arg(rgb[0]).arg(rgb[1]).arg(rgb[2]).arg(QChar(0x2014));
 	swatch->setToolTip(tip);
 	return swatch;
 }
@@ -1032,8 +1032,8 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 					pal.setColor(QPalette::Text, c);
 					le->setPalette(pal);
 				}
-				gk->setToolTip(QStringLiteral("Suggested key for this mapper type — edit to add"));
-				gv->setToolTip(QStringLiteral("Suggested value — edit to add"));
+				gk->setToolTip(QStringLiteral("Suggested key for this mapper type %1 edit to add").arg(QChar(0x2014)));
+				gv->setToolTip(QStringLiteral("Suggested value %1 edit to add").arg(QChar(0x2014)));
 				apply_key_help(gk, gv);
 
 				// Promote to a real row (solid style + k/v names, then serialize)
@@ -2077,7 +2077,7 @@ private:
 		surface_form->addRow(QStringLiteral("Sort Level:"), sort_spin);
 		if (mesh.prelit) {
 			surface_form->addRow(QString(), new QLabel(m_EditMode
-				? QStringLiteral("(Prelit material — read-only)")
+				? QStringLiteral("(Prelit material %1 read-only)").arg(QChar(0x2014))
 				: QStringLiteral("(Prelit material)")));
 		}
 		layout->addWidget(surface_group);
