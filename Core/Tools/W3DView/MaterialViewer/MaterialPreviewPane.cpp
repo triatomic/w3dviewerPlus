@@ -25,7 +25,8 @@
 #include "dx8wrapper.h"
 #include "light.h"
 #include "matrix3.h"	// Matrix3x3 for the pan basis
-#include "quat.h"		// Build_Matrix3 / Build_Quaternion
+#include "quat.h"		// Build_Matrix3 / Build_Quaternion / Trackball
+#include "rcfile.h"	// ResourceFileClass (embedded Light.w3d gizmo)
 #include "wwmath.h"	// DEG_TO_RADF
 #include "mesh.h"
 #include "meshmdl.h"
@@ -63,6 +64,9 @@ CMaterialPreviewPane::CMaterialPreviewPane()
 	  m_Camera(nullptr),
 	  m_Light(nullptr),
 	  m_RenderObj(nullptr),
+	  m_LightMesh(nullptr),
+	  m_LightMeshInScene(false),
+	  m_LightMeshScale(1.0F),
 	  m_SphereCenter(0, 0, 0),
 	  m_CameraDistance(10.0F),
 	  m_MinZoomAdjust(0.0F),
@@ -142,6 +146,15 @@ CMaterialPreviewPane::OnDestroy()
 		m_Scene->Remove_Render_Object(m_RenderObj);
 		m_RenderObj->Release_Ref();
 		m_RenderObj = nullptr;
+	}
+
+	if (m_LightMesh != nullptr) {
+		if (m_LightMeshInScene && m_Scene != nullptr) {
+			m_Scene->Remove_Render_Object(m_LightMesh);
+			m_LightMeshInScene = false;
+		}
+		m_LightMesh->Release_Ref();
+		m_LightMesh = nullptr;
 	}
 
 	if (m_Light != nullptr) {
@@ -482,6 +495,131 @@ CMaterialPreviewPane::Reset_Camera_To_Sphere(const SphereClass &sphere)
 	m_Camera->Set_Clip_Planes(min_dist, max_dist);
 
 	m_ViewedSphere = sphere;
+
+	// Mirror the main viewport (Reset_Camera_To_Display_Sphere): place the
+	// scene light above the object and keep the Ctrl gizmo with it, rescaled
+	// to the framed object.
+	if (m_Light != nullptr) {
+		Matrix3D light_tm(1);
+		light_tm.Set_Translation(sphere.Center);
+		light_tm.Translate(Vector3(0, 0, 0.7F * m_CameraDistance));
+		m_Light->Set_Transform(light_tm);
+		if (m_LightMesh != nullptr) {
+			m_LightMesh->Set_Transform(light_tm);
+			m_LightMesh->Scale(m_CameraDistance / (14.0F * m_LightMeshScale));
+			m_LightMeshScale = m_CameraDistance / 14.0F;
+		}
+	}
+}
+
+// Adds/removes the light gizmo mesh so it is visible exactly while Ctrl is
+// held (called from OnMouseMove, like the main viewport). The mesh comes from
+// the LIGHT prototype (embedded Light.w3d resource), created lazily.
+void
+CMaterialPreviewPane::Sync_Light_Mesh(bool visible)
+{
+	if (visible && m_LightMesh == nullptr && m_Light != nullptr) {
+		WW3DAssetManager *assets = WW3DAssetManager::Get_Instance();
+		// The main view loads Light.w3d at startup; ensure it in case that changes.
+		if (assets->Render_Obj_Exists("LIGHT") == false) {
+			ResourceFileClass light_mesh_file(nullptr, "Light.w3d");
+			assets->Load_3D_Assets(light_mesh_file);
+		}
+		m_LightMesh = assets->Create_Render_Obj("LIGHT");
+		if (m_LightMesh != nullptr) {
+			m_LightMesh->Set_Transform(m_Light->Get_Transform());
+			m_LightMesh->Scale(m_CameraDistance / 14.0F);
+			m_LightMeshScale = m_CameraDistance / 14.0F;
+		}
+	}
+
+	if (m_LightMesh == nullptr || m_Scene == nullptr) {
+		return;
+	}
+
+	if (visible && !m_LightMeshInScene) {
+		m_LightMesh->Set_Transform(m_Light->Get_Transform());
+		m_Scene->Add_Render_Object(m_LightMesh);
+		m_LightMeshInScene = true;
+	} else if (!visible && m_LightMeshInScene) {
+		m_Scene->Remove_Render_Object(m_LightMesh);
+		m_LightMeshInScene = false;
+	}
+}
+
+// Ctrl+left-drag: trackball-rotate the scene light about the orbit centre
+// (same math as CGraphicView's light rotation).
+void
+CMaterialPreviewPane::Rotate_Light(CPoint point)
+{
+	if (m_Light == nullptr || m_Camera == nullptr) {
+		return;
+	}
+
+	RECT rect;
+	GetClientRect(&rect);
+	float midPointX = float(rect.right >> 1);
+	float midPointY = float(rect.bottom >> 1);
+	if (midPointX == 0.0F || midPointY == 0.0F) {
+		return;
+	}
+
+	float lastPointX = ((float)m_LastPoint.x - midPointX) / midPointX;
+	float lastPointY = (midPointY - (float)m_LastPoint.y) / midPointY;
+	float pointX = ((float)point.x - midPointX) / midPointX;
+	float pointY = (midPointY - (float)point.y) / midPointY;
+
+	Quaternion mouse_motion = Inverse(::Trackball(lastPointX, lastPointY, pointX, pointY, 0.8F));
+	Quaternion camera = Build_Quaternion(m_Camera->Get_Transform());
+	Quaternion cur_light = Build_Quaternion(m_Light->Get_Transform());
+
+	Quaternion light_orientation = camera;
+	light_orientation = light_orientation * mouse_motion;
+	light_orientation = light_orientation * Inverse(camera);
+	light_orientation = light_orientation * cur_light;
+	light_orientation.Normalize();
+
+	Vector3 to_center;
+	Matrix3D matrix = m_Light->Get_Transform();
+	Matrix3D::Inverse_Transform_Vector(matrix, m_SphereCenter, &to_center);
+
+	Matrix3D light_tm(light_orientation, m_SphereCenter);
+	light_tm.Translate(-to_center);
+
+	if (m_LightMesh != nullptr) {
+		m_LightMesh->Set_Transform(light_tm);
+	}
+	m_Light->Set_Transform(light_tm);
+}
+
+// Ctrl+right-drag: move the light along its view axis, refusing to enter the
+// object's bounding sphere (same rule as CGraphicView).
+void
+CMaterialPreviewPane::Adjust_Light_Distance(int deltaY)
+{
+	if (m_Light == nullptr || deltaY == 0) {
+		return;
+	}
+
+	RECT rect;
+	GetClientRect(&rect);
+	if (rect.bottom <= rect.top) {
+		return;
+	}
+
+	float deltay = (float)deltaY / (float)(rect.bottom - rect.top);
+	float adjustment = deltay * (m_ViewedSphere.Radius * 3.0F);
+
+	Matrix3D transform = m_Light->Get_Transform();
+	transform.Translate(Vector3(0, 0, adjustment));
+
+	float distance = (transform.Get_Translation() - m_ViewedSphere.Center).Length();
+	if (distance > m_ViewedSphere.Radius) {
+		if (m_LightMesh != nullptr) {
+			m_LightMesh->Set_Transform(transform);
+		}
+		m_Light->Set_Transform(transform);
+	}
 }
 
 void
@@ -795,8 +933,13 @@ CMaterialPreviewPane::OnMouseMove(UINT flags, CPoint point)
 	int iDeltaX = m_LastPoint.x - point.x;
 	int iDeltaY = m_LastPoint.y - point.y;
 
-	// Middle + Alt: orbit. Middle only, or left+right: pan. Left only: orbit.
-	// Right only: zoom on vertical drag.
+	// The light gizmo is visible exactly while Ctrl is held over the pane
+	// (mirrors the main viewport's behaviour).
+	Sync_Light_Mesh((flags & MK_CONTROL) != 0);
+
+	// Middle + Alt: orbit. Middle only, or left+right: pan. Ctrl+left: rotate
+	// the light. Ctrl+right: light distance. Left only: orbit. Right only:
+	// zoom on vertical drag.
 	if (m_bMMouseDown && m_AltOnMDown) {
 		Orbit_Camera(iDeltaX, iDeltaY);
 		m_LastPoint = point;
@@ -823,6 +966,14 @@ CMaterialPreviewPane::OnMouseMove(UINT flags, CPoint point)
 		m_SphereCenter += view * cameraPan;
 
 		m_Camera->Set_Transform(transform);
+		m_LastPoint = point;
+	}
+	else if ((flags & MK_CONTROL) && m_bMouseDown) {
+		Rotate_Light(point);
+		m_LastPoint = point;
+	}
+	else if ((flags & MK_CONTROL) && m_bRMouseDown) {
+		Adjust_Light_Distance(iDeltaY);
 		m_LastPoint = point;
 	}
 	else if (m_bMouseDown) {

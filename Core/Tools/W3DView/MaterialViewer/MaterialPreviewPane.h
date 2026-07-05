@@ -109,6 +109,14 @@ private:
 	// camera-local X and yaw about world Z through the orbit centre.
 	void Orbit_Camera(int deltaX, int deltaY);
 
+	// Movable scene light, mirroring the main viewport: holding Ctrl shows the
+	// LIGHT gizmo mesh at the scene light; Ctrl+left-drag trackball-rotates the
+	// light about the orbit centre; Ctrl+right-drag moves it closer/farther
+	// (never inside the object's bounding sphere).
+	void Sync_Light_Mesh(bool visible);
+	void Rotate_Light(CPoint point);
+	void Adjust_Light_Distance(int deltaY);
+
 	// Confines/wraps the cursor to the pane while dragging (infinite drag).
 	void Clip_Cursor_To_View();
 	bool Wrap_Cursor_In_View(CPoint &point);
@@ -122,6 +130,11 @@ private:
 	CameraClass			*m_Camera;
 	LightClass			*m_Light;
 	RenderObjClass		*m_RenderObj;
+
+	// Ctrl-held light gizmo (created lazily from the embedded Light.w3d).
+	RenderObjClass		*m_LightMesh;
+	bool				m_LightMeshInScene;
+	float				m_LightMeshScale;	// last applied gizmo scale
 
 	// Name of the currently loaded model. LoadModel re-frames the camera only
 	// when this changes, so a post-save reload of the same model keeps the view.
