@@ -958,6 +958,13 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 			QHBoxLayout *hl = new QHBoxLayout(row);
 			hl->setContentsMargins(0, 0, 0, 0);
 			hl->setSpacing(2);
+			// Left spacer the width of a ghost row's "+" button, so real rows'
+			// Key/Value columns line up with the suggestion rows below them.
+			if (edit) {
+				QWidget *spacer = new QWidget;
+				spacer->setFixedSize(18, 18);
+				hl->addWidget(spacer, 0);
+			}
 			QLineEdit *k = new QLineEdit(key);
 			k->setObjectName(QStringLiteral("k"));
 			k->setPlaceholderText(QStringLiteral("Key"));
@@ -1016,6 +1023,16 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 				QHBoxLayout *hl = new QHBoxLayout(row);
 				hl->setContentsMargins(0, 0, 0, 0);
 				hl->setSpacing(2);
+				// "+" button on the left promotes this dimmed suggestion into a
+				// real key/value row (added to the args). Declared first so it can
+				// be captured by commit_ghost and hidden once promoted.
+				QToolButton *add = new QToolButton;
+				add->setText(QStringLiteral("+"));
+				add->setObjectName(QStringLiteral("add"));
+				add->setFixedSize(18, 18);
+				add->setAutoRaise(true);
+				add->setToolTip(QStringLiteral("Add this suggested key/value"));
+
 				QLineEdit *gk = new QLineEdit(QString::fromStdString(kv.first));
 				gk->setObjectName(QStringLiteral("gk"));
 				QLineEdit *gv = new QLineEdit(QString::fromStdString(kv.second));
@@ -1032,18 +1049,14 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 					pal.setColor(QPalette::Text, c);
 					le->setPalette(pal);
 				}
-				gk->setToolTip(QStringLiteral("Suggested key for this mapper type %1 edit to add").arg(QChar(0x2014)));
-				gv->setToolTip(QStringLiteral("Suggested value %1 edit to add").arg(QChar(0x2014)));
+				gk->setToolTip(QStringLiteral("Suggested key for this mapper type %1 use + or edit to add").arg(QChar(0x2014)));
+				gv->setToolTip(QStringLiteral("Suggested value %1 use + or edit to add").arg(QChar(0x2014)));
 				apply_key_help(gk, gv);
 
-				// Promote to a real row (solid style + k/v names, then serialize)
-				// only when the user commits the edit by leaving the field — Tab
-				// or Enter — via editingFinished. A per-field "touched" flag guards
-				// against promoting a ghost the user merely tabbed through without
-				// changing. Typing alone does not write the suggestion.
-				auto touched = std::make_shared<bool>(false);
-				auto promote = [row, gk, gv, serialize, touched]() {
-					if (!*touched) return;			// tabbed through, unchanged
+				// Turns the dimmed suggestion into a real row: solid style, k/v
+				// object names (so serialize() picks it up), hide the "+" button,
+				// then serialize. Idempotent — re-running on a promoted row no-ops.
+				auto commit_ghost = [row, gk, gv, add, serialize]() {
 					if (gk->objectName() == QStringLiteral("k")) return;	// already promoted
 					gk->setObjectName(QStringLiteral("k"));
 					gv->setObjectName(QStringLiteral("v"));
@@ -1054,8 +1067,20 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 						// Restore full-opacity text from the inherited palette.
 						le->setPalette(QApplication::palette());
 					}
+					add->hide();	// no longer a suggestion; a real row is deleted via 'x' logic
 					serialize();
 				};
+
+				// Edit-driven promotion: only when the user actually changed a field
+				// and then left it (Tab/Enter). A per-field "touched" flag guards
+				// against promoting a ghost merely tabbed through. Typing alone does
+				// not write the suggestion; the "+" button commits it unconditionally.
+				auto touched = std::make_shared<bool>(false);
+				auto promote = [commit_ghost, touched]() {
+					if (!*touched) return;			// tabbed through, unchanged
+					commit_ghost();
+				};
+				QObject::connect(add, &QToolButton::clicked, [commit_ghost]() { commit_ghost(); });
 				QObject::connect(gk, &QLineEdit::textEdited, [touched]() { *touched = true; });
 				QObject::connect(gv, &QLineEdit::textEdited, [touched]() { *touched = true; });
 				QObject::connect(gk, &QLineEdit::textChanged, [gk, gv, apply_key_help]() { apply_key_help(gk, gv); });
@@ -1070,8 +1095,14 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 					if (gk->objectName() == QStringLiteral("k")) serialize();
 				});
 
+				hl->addWidget(add, 0);
 				hl->addWidget(gk, 1);
 				hl->addWidget(gv, 1);
+				// Right spacer matching a real row's delete (x) button width, so the
+				// Value column ends at the same place as the real rows above.
+				QWidget *rspacer = new QWidget;
+				rspacer->setFixedSize(18, 18);
+				hl->addWidget(rspacer, 0);
 				pretty_layout->addWidget(row);
 			}
 		}
@@ -1109,22 +1140,12 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 				Show_Help(tip);
 			}
 
-			// Prefill the arg-key template for the chosen mapper, but only when
-			// the Args box is empty — never clobber args already in the chunk.
-			// Fill with signals blocked so the type change + prefilled args are
-			// one undo step (dirty() below snapshots both at once), not two.
-			if (args_edit->toPlainText().trimmed().isEmpty()
-					&& value >= 0 && value < (int)(sizeof(MAPPER_ARG_TEMPLATES) / sizeof(MAPPER_ARG_TEMPLATES[0]))) {
-				const char *tmpl = MAPPER_ARG_TEMPLATES[value];
-				if (tmpl[0] != '\0') {
-					QSignalBlocker block(args_edit);
-					args_edit->setPlainText(QString::fromLatin1(tmpl));
-					*args_ptr = args_edit->toPlainText().toStdString();
-				}
-			}
-			// Refresh both views' suggestion guidance for the new type: the raw
-			// hint line and (if showing) the Table ghost rows. When args already
-			// exist, this shows only the still-missing keys as dimmed suggestions.
+			// Never auto-write args on a type change: the suggested keys for the
+			// new type are surfaced as DIMMED guidance only (the Raw hint line and,
+			// in Table mode, the ghost rows). The user opts in per key via the
+			// Table-mode "+" button (or by editing a ghost row). This avoids the
+			// bug where switching away from UV (empty template) into a mapper with
+			// a template silently injected real lines into an empty Args box.
 			refresh_raw_hint();
 			if (pretty_toggle->isChecked()) rebuild_pretty();
 			if (dirty) dirty();
