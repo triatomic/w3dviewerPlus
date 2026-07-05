@@ -24,6 +24,9 @@
 #include "dx8renderer.h"
 #include "dx8wrapper.h"
 #include "light.h"
+#include "matrix3.h"	// Matrix3x3 for the pan basis
+#include "quat.h"		// Build_Matrix3 / Build_Quaternion
+#include "wwmath.h"	// DEG_TO_RADF
 #include "mesh.h"
 #include "meshmdl.h"
 #include "rendobj.h"
@@ -33,6 +36,7 @@
 #include "w3d_file.h"
 #include "ww3d.h"
 #include "../GraphicView.h"	// backface-tint toggle + colour (shared with main viewport)
+#include "../Utils.h"		// GetCurrentDocument
 #include "../W3DDarkMode.h"
 #include "../W3DViewDoc.h"
 
@@ -44,6 +48,10 @@ BEGIN_MESSAGE_MAP(CMaterialPreviewPane, CWnd)
 	ON_WM_SIZE()
 	ON_WM_LBUTTONDOWN()
 	ON_WM_LBUTTONUP()
+	ON_WM_RBUTTONDOWN()
+	ON_WM_RBUTTONUP()
+	ON_WM_MBUTTONDOWN()
+	ON_WM_MBUTTONUP()
 	ON_WM_MOUSEMOVE()
 	ON_WM_MOUSEWHEEL()
 END_MESSAGE_MAP()
@@ -55,14 +63,19 @@ CMaterialPreviewPane::CMaterialPreviewPane()
 	  m_Camera(nullptr),
 	  m_Light(nullptr),
 	  m_RenderObj(nullptr),
-	  m_Center(0, 0, 0),
-	  m_Distance(10.0F),
-	  m_Yaw(0),
-	  m_Pitch(0.35F),
-	  m_Dragging(false),
+	  m_SphereCenter(0, 0, 0),
+	  m_CameraDistance(10.0F),
+	  m_MinZoomAdjust(0.0F),
+	  m_bMouseDown(FALSE),
+	  m_bRMouseDown(FALSE),
+	  m_bMMouseDown(FALSE),
+	  m_AltOnMDown(false),
 	  m_SizeDirty(false),
 	  m_LastRenderTicks(0)
 {
+	m_Rotation.Make_Identity();
+	m_LastPoint.x = m_LastPoint.y = 0;
+	m_MButtonDownPoint.x = m_MButtonDownPoint.y = 0;
 }
 
 CMaterialPreviewPane::~CMaterialPreviewPane()
@@ -100,7 +113,7 @@ CMaterialPreviewPane::OnCreate(LPCREATESTRUCT create_struct)
 	m_Scene->Add_Render_Object(m_Light);
 
 	Create_Swap_Chain();
-	Update_Camera();
+	Reset_Camera_To_Sphere(SphereClass(Vector3(0, 0, 0), 3.0F));	// sane default until a model loads
 
 	// W3DView does not otherwise use the cleanup hook (only WorldBuilder does),
 	// so the single slot is free for the preview pane.
@@ -267,15 +280,12 @@ CMaterialPreviewPane::LoadModel(const char *name)
 	// keeps the user's current orbit and zoom so the view doesn't jump.
 	bool same_model = (m_LoadedName == name);
 	SphereClass sphere = render_obj->Get_Bounding_Sphere();
-	m_Center = sphere.Center;
 	if (!same_model) {
-		m_Distance = sphere.Radius * 3.0F;
-		m_Distance = (m_Distance < 1.0F) ? 1.0F : m_Distance;
-		m_Yaw = 0;
-		m_Pitch = 0.35F;
+		Reset_Camera_To_Sphere(sphere);
+	} else {
+		m_ViewedSphere = sphere;
 	}
 	m_LoadedName = name;
-	Update_Camera();
 	return true;
 }
 
@@ -447,29 +457,139 @@ CMaterialPreviewPane::ApplyLiveMaterials(const W3dMaterialViewer::MaterialDocume
 	Apply_To_Render_Obj(m_RenderObj, document);
 }
 
+// Frames the camera on `sphere` — same model as CGraphicView::Reset_Camera_To_
+// Display_Sphere: distance = 3*radius, looking down +X at the centre.
 void
-CMaterialPreviewPane::Update_Camera()
+CMaterialPreviewPane::Reset_Camera_To_Sphere(const SphereClass &sphere)
 {
 	if (m_Camera == nullptr) {
 		return;
 	}
 
-	// Clamp the pitch so Look_At's up vector stays valid.
-	if (m_Pitch > 1.55F) m_Pitch = 1.55F;
-	if (m_Pitch < -1.55F) m_Pitch = -1.55F;
-
-	Vector3 offset;
-	offset.X = m_Distance * cos(m_Pitch) * cos(m_Yaw);
-	offset.Y = m_Distance * cos(m_Pitch) * sin(m_Yaw);
-	offset.Z = m_Distance * sin(m_Pitch);
+	m_CameraDistance = sphere.Radius * 3.0F;
+	m_CameraDistance = (m_CameraDistance < 1.0F) ? 1.0F : m_CameraDistance;
 
 	Matrix3D transform(1);
-	transform.Look_At(m_Center + offset, m_Center, 0);
+	transform.Look_At(sphere.Center + Vector3(m_CameraDistance, 0, 0), sphere.Center, 0);
+
+	m_SphereCenter = sphere.Center;
+	m_MinZoomAdjust = m_CameraDistance / 190.0F;
+	m_Rotation = Build_Quaternion(transform);
 	m_Camera->Set_Transform(transform);
 
-	float max_dist = m_Distance * 60.0F;
-	float min_dist = max(0.2F, m_Distance / 380.0F);
+	float max_dist = m_CameraDistance * 60.0F;
+	float min_dist = max(0.2F, m_MinZoomAdjust / 2);
 	m_Camera->Set_Clip_Planes(min_dist, max_dist);
+
+	m_ViewedSphere = sphere;
+}
+
+// 3ds Max-style orbit (mirrors CGraphicView::Orbit_Camera): pitch about the
+// camera-local X and yaw about world Z through m_SphereCenter, both scaled to
+// the viewport so a full sweep is 360/180 degrees.
+void
+CMaterialPreviewPane::Orbit_Camera(int deltaX, int deltaY)
+{
+	if (m_Camera == nullptr) {
+		return;
+	}
+
+	RECT rect;
+	GetClientRect(&rect);
+	const float viewW = float(rect.right  > 1 ? rect.right  : 1);
+	const float viewH = float(rect.bottom > 1 ? rect.bottom : 1);
+
+	const float yawRad = DEG_TO_RADF( (float)deltaX / viewW * 360.0f );
+	float pitchRad = DEG_TO_RADF( -(float)deltaY / viewH * 180.0f );
+
+	// Respect the shared "Invert Movement (Y)" preference (View menu / persisted
+	// in the profile), read live from the main viewport so a toggle applies here too.
+	CW3DViewDoc *doc = GetCurrentDocument();
+	CGraphicView *mainView = (doc != nullptr) ? doc->GetGraphicView() : nullptr;
+	if (mainView != nullptr && mainView->Is_Invert_Camera_Y()) {
+		pitchRad = -pitchRad;
+	}
+
+	Matrix3D transform = m_Camera->Get_Transform();
+
+	// Pitch: local X rotation about the camera-space image of the orbit centre.
+	{
+		Matrix3D inverseMatrix;
+		transform.Get_Orthogonal_Inverse(inverseMatrix);
+		Vector3 to_object;
+		inverseMatrix.mulVector3(m_SphereCenter, to_object);
+
+		transform.Translate(to_object);
+		transform.Rotate_X(pitchRad);
+		transform.Translate(-to_object);
+	}
+
+	// Yaw: world-space Z rotation about the orbit centre (no roll).
+	transform.Set_Translation(transform.Get_Translation() - m_SphereCenter);
+	transform.Pre_Rotate_Z(yawRad);
+	transform.Set_Translation(transform.Get_Translation() + m_SphereCenter);
+
+	// Keep the accumulator in sync so pan uses the right basis.
+	m_Rotation = Build_Quaternion(transform);
+	m_Camera->Set_Transform(transform);
+}
+
+// Confines the cursor to the pane's client rect during a drag.
+void
+CMaterialPreviewPane::Clip_Cursor_To_View()
+{
+	RECT rect;
+	GetClientRect(&rect);
+	CPoint tl(rect.left, rect.top), br(rect.right, rect.bottom);
+	ClientToScreen(&tl);
+	ClientToScreen(&br);
+	RECT screen = { tl.x, tl.y, br.x, br.y };
+	::ClipCursor(&screen);
+}
+
+// Wraps the cursor to the opposite edge when it reaches a border, so orbit/pan
+// drags are effectively infinite.
+bool
+CMaterialPreviewPane::Wrap_Cursor_In_View(CPoint &point)
+{
+	const int EDGE_MARGIN = 4;
+
+	RECT rect;
+	GetClientRect(&rect);
+
+	const int w = rect.right - rect.left;
+	const int h = rect.bottom - rect.top;
+	if (w <= 2 * EDGE_MARGIN || h <= 2 * EDGE_MARGIN) {
+		return false;
+	}
+
+	int newX = point.x;
+	int newY = point.y;
+
+	if (point.x <= rect.left + EDGE_MARGIN) {
+		newX = rect.right - EDGE_MARGIN - 1;
+	} else if (point.x >= rect.right - EDGE_MARGIN - 1) {
+		newX = rect.left + EDGE_MARGIN + 1;
+	}
+
+	if (point.y <= rect.top + EDGE_MARGIN) {
+		newY = rect.bottom - EDGE_MARGIN - 1;
+	} else if (point.y >= rect.bottom - EDGE_MARGIN - 1) {
+		newY = rect.top + EDGE_MARGIN + 1;
+	}
+
+	if (newX == point.x && newY == point.y) {
+		return false;
+	}
+
+	CPoint screen(newX, newY);
+	ClientToScreen(&screen);
+	::SetCursorPos(screen.x, screen.y);
+
+	point.x = newX;
+	point.y = newY;
+	m_LastPoint = point;
+	return true;
 }
 
 void
@@ -567,41 +687,167 @@ CMaterialPreviewPane::OnSize(UINT type, int cx, int cy)
 	}
 }
 
+// Mouse controls mirror the main viewport (CGraphicView): left-drag orbits,
+// right-drag zooms, middle-drag pans, middle+Alt orbits, wheel zooms. Cursor is
+// clipped to the pane and wrapped at the edges for infinite orbit/pan drags.
+
 void
 CMaterialPreviewPane::OnLButtonDown(UINT flags, CPoint point)
 {
-	m_Dragging = true;
-	m_LastPoint = point;
 	SetCapture();
+	Clip_Cursor_To_View();
+	m_bMouseDown = TRUE;
+	m_LastPoint = point;
 	CWnd::OnLButtonDown(flags, point);
 }
 
 void
 CMaterialPreviewPane::OnLButtonUp(UINT flags, CPoint point)
 {
-	m_Dragging = false;
-	ReleaseCapture();
+	m_bMouseDown = FALSE;
+	if (!m_bRMouseDown && !m_bMMouseDown) {
+		::ClipCursor(nullptr);
+		ReleaseCapture();
+	}
 	CWnd::OnLButtonUp(flags, point);
+}
+
+void
+CMaterialPreviewPane::OnRButtonDown(UINT flags, CPoint point)
+{
+	SetCapture();
+	Clip_Cursor_To_View();
+	m_bRMouseDown = TRUE;
+	m_LastPoint = point;
+	CWnd::OnRButtonDown(flags, point);
+}
+
+void
+CMaterialPreviewPane::OnRButtonUp(UINT flags, CPoint point)
+{
+	m_bRMouseDown = FALSE;
+	if (!m_bMouseDown && !m_bMMouseDown) {
+		::ClipCursor(nullptr);
+		ReleaseCapture();
+	}
+	CWnd::OnRButtonUp(flags, point);
+}
+
+void
+CMaterialPreviewPane::OnMButtonDown(UINT flags, CPoint point)
+{
+	SetCapture();
+	Clip_Cursor_To_View();
+	m_bMMouseDown = TRUE;
+	m_LastPoint = point;
+	m_MButtonDownPoint = point;
+	m_AltOnMDown = (::GetKeyState(VK_MENU) & 0x8000) != 0;
+	CWnd::OnMButtonDown(flags, point);
+}
+
+void
+CMaterialPreviewPane::OnMButtonUp(UINT flags, CPoint point)
+{
+	m_bMMouseDown = FALSE;
+	m_AltOnMDown = false;
+
+	// Shift+middle-click (no drag) re-frames the camera, like the main viewport.
+	int dx = point.x - m_MButtonDownPoint.x;
+	int dy = point.y - m_MButtonDownPoint.y;
+	if ((dx * dx + dy * dy) < 16 && (flags & MK_SHIFT)) {
+		Reset_Camera_To_Sphere(m_ViewedSphere);
+	}
+
+	if (!m_bMouseDown && !m_bRMouseDown) {
+		::ClipCursor(nullptr);
+		ReleaseCapture();
+	}
+	CWnd::OnMButtonUp(flags, point);
 }
 
 void
 CMaterialPreviewPane::OnMouseMove(UINT flags, CPoint point)
 {
-	if (m_Dragging) {
-		m_Yaw -= (point.x - m_LastPoint.x) * 0.01F;
-		m_Pitch += (point.y - m_LastPoint.y) * 0.01F;
+	int iDeltaX = m_LastPoint.x - point.x;
+	int iDeltaY = m_LastPoint.y - point.y;
+
+	// Middle + Alt: orbit. Middle only, or left+right: pan. Left only: orbit.
+	// Right only: zoom on vertical drag.
+	if (m_bMMouseDown && m_AltOnMDown) {
+		Orbit_Camera(iDeltaX, iDeltaY);
 		m_LastPoint = point;
-		Update_Camera();
+		Wrap_Cursor_In_View(point);
 	}
+	else if (m_bMMouseDown || (m_bMouseDown && m_bRMouseDown)) {
+		Matrix3D transform = m_Camera->Get_Transform();
+
+		RECT rect;
+		GetClientRect(&rect);
+		float midPointX = float(rect.right >> 1);
+		float midPointY = float(rect.bottom >> 1);
+
+		float lastPointX = ((float)m_LastPoint.x - midPointX) / midPointX;
+		float lastPointY = (midPointY - (float)m_LastPoint.y) / midPointY;
+		float pointX = ((float)point.x - midPointX) / midPointX;
+		float pointY = (midPointY - (float)point.y) / midPointY;
+
+		Vector3 cameraPan(-1.0F * m_CameraDistance * (pointX - lastPointX),
+			-1.0F * m_CameraDistance * (pointY - lastPointY), 0.0F);
+		transform.Translate(cameraPan);
+
+		Matrix3x3 view = Build_Matrix3(m_Rotation);
+		m_SphereCenter += view * cameraPan;
+
+		m_Camera->Set_Transform(transform);
+		m_LastPoint = point;
+	}
+	else if (m_bMouseDown) {
+		Orbit_Camera(iDeltaX, iDeltaY);
+		m_LastPoint = point;
+		Wrap_Cursor_In_View(point);
+	}
+	else if (m_bRMouseDown) {
+		if (iDeltaY != 0) {
+			Matrix3D transform = m_Camera->Get_Transform();
+
+			RECT rect;
+			GetClientRect(&rect);
+			float deltay = (float)iDeltaY / (float)(rect.bottom - rect.top);
+			float adjustment = deltay * m_CameraDistance * 3.0F;
+
+			if ((adjustment < m_MinZoomAdjust) && (adjustment >= 0.0F)) adjustment = m_MinZoomAdjust;
+			if ((adjustment > -m_MinZoomAdjust) && (adjustment <= 0.0F)) adjustment = -m_MinZoomAdjust;
+
+			if ((m_CameraDistance + adjustment) > 0.0F) {
+				m_CameraDistance += adjustment;
+				transform.Translate(Vector3(0.0F, 0.0F, adjustment));
+				m_Camera->Set_Transform(transform);
+			}
+		}
+		m_LastPoint = point;
+	}
+
 	CWnd::OnMouseMove(flags, point);
 }
 
 BOOL
 CMaterialPreviewPane::OnMouseWheel(UINT flags, short delta, CPoint point)
 {
-	float scale = (delta > 0) ? (1.0F / 1.15F) : 1.15F;
-	m_Distance *= scale;
-	m_Distance = (m_Distance < 0.5F) ? 0.5F : m_Distance;
-	Update_Camera();
+	if (m_Camera != nullptr) {
+		Matrix3D transform = m_Camera->Get_Transform();
+
+		// Positive delta = scroll up = zoom in (toward the object).
+		float deltay = -(float)delta / (float)WHEEL_DELTA * 0.1F;
+		float adjustment = deltay * m_CameraDistance * 3.0F;
+
+		if ((adjustment < m_MinZoomAdjust) && (adjustment >= 0.0F)) adjustment = m_MinZoomAdjust;
+		if ((adjustment > -m_MinZoomAdjust) && (adjustment <= 0.0F)) adjustment = -m_MinZoomAdjust;
+
+		if ((m_CameraDistance + adjustment) > 0.0F) {
+			m_CameraDistance += adjustment;
+			transform.Translate(Vector3(0.0F, 0.0F, adjustment));
+			m_Camera->Set_Transform(transform);
+		}
+	}
 	return TRUE;
 }

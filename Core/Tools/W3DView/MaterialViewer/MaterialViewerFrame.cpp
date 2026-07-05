@@ -416,6 +416,24 @@ CMaterialViewerFrame::NotifyThemeChanged()
 BOOL
 CMaterialViewerFrame::PreTranslateMessage(MSG *msg)
 {
+	// The File/Edit menu shortcuts (Ctrl+O/S/Z, Ctrl+Shift+Z) are advertised in
+	// the menu but the frame has no accelerator table, and the Qt hand-off below
+	// would otherwise swallow them. Handle these viewer-level commands here so
+	// they work regardless of whether focus is in the Qt panel or the preview.
+	if (msg->message == WM_KEYDOWN && (::GetKeyState(VK_CONTROL) & 0x8000)) {
+		const bool shift = (::GetKeyState(VK_SHIFT) & 0x8000) != 0;
+		UINT command = 0;
+		switch (msg->wParam) {
+			case 'S': command = IDM_MATVIEWER_SAVE; break;
+			case 'O': command = IDM_MATVIEWER_OPEN; break;
+			case 'Z': command = shift ? IDM_MATVIEWER_REDO : IDM_MATVIEWER_UNDO; break;
+		}
+		if (command != 0) {
+			SendMessage(WM_COMMAND, MAKEWPARAM(command, 0), 0);
+			return TRUE;
+		}
+	}
+
 	if (msg->message >= WM_KEYFIRST && msg->message <= WM_KEYLAST) {
 #ifdef W3DVIEW_HAS_QT
 		HWND panel = m_PanelWnd;

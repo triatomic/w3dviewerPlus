@@ -25,6 +25,8 @@
 #include <string>
 
 #include "vector3.h"
+#include "quat.h"
+#include "sphere.h"
 #include "dx8wrapper.h"
 
 class RenderObjClass;
@@ -75,6 +77,10 @@ protected:
 	afx_msg void OnSize(UINT type, int cx, int cy);
 	afx_msg void OnLButtonDown(UINT flags, CPoint point);
 	afx_msg void OnLButtonUp(UINT flags, CPoint point);
+	afx_msg void OnRButtonDown(UINT flags, CPoint point);
+	afx_msg void OnRButtonUp(UINT flags, CPoint point);
+	afx_msg void OnMButtonDown(UINT flags, CPoint point);
+	afx_msg void OnMButtonUp(UINT flags, CPoint point);
 	afx_msg void OnMouseMove(UINT flags, CPoint point);
 	afx_msg BOOL OnMouseWheel(UINT flags, short delta, CPoint point);
 	DECLARE_MESSAGE_MAP()
@@ -82,7 +88,18 @@ protected:
 private:
 	void Free_Swap_Chain();
 	void Create_Swap_Chain();
-	void Update_Camera();
+
+	// Frames the camera on `sphere` (same model as the main viewport's
+	// Reset_Camera_To_Display_Sphere): distance = 3*radius, Look_At down +X.
+	void Reset_Camera_To_Sphere(const SphereClass &sphere);
+
+	// 3ds Max-style orbit shared by left-drag and MMB+Alt: pitch about the
+	// camera-local X and yaw about world Z through the orbit centre.
+	void Orbit_Camera(int deltaX, int deltaY);
+
+	// Confines/wraps the cursor to the pane while dragging (infinite drag).
+	void Clip_Cursor_To_View();
+	bool Wrap_Cursor_In_View(CPoint &point);
 
 	IDirect3DSwapChain8	*m_SwapChain;
 	// Pane-sized non-MSAA depth buffer. The device's default depth buffer is
@@ -98,13 +115,22 @@ private:
 	// when this changes, so a post-save reload of the same model keeps the view.
 	std::string			m_LoadedName;
 
-	// Orbit camera state
-	Vector3				m_Center;
-	float				m_Distance;
-	float				m_Yaw;
-	float				m_Pitch;
-	bool				m_Dragging;
+	// Orbit camera state — mirrors the main viewport (CGraphicView). The orbit
+	// centre and accumulated rotation are per-instance (the main view keeps its
+	// equivalents as file-scope globals; here they must not collide with those).
+	SphereClass			m_ViewedSphere;		// last framed sphere (for reset)
+	Vector3				m_SphereCenter;		// orbit centre
+	Quaternion			m_Rotation;			// accumulated camera rotation (for pan)
+	float				m_CameraDistance;
+	float				m_MinZoomAdjust;
+
+	// Mouse-button bookkeeping (matches CGraphicView).
+	BOOL				m_bMouseDown;		// left
+	BOOL				m_bRMouseDown;		// right
+	BOOL				m_bMMouseDown;		// middle
+	bool				m_AltOnMDown;		// Alt latched at middle-down
 	CPoint				m_LastPoint;
+	CPoint				m_MButtonDownPoint;
 
 	// Set by OnSize; the swap chain is recreated on the next Render() so a
 	// drag-resize recreates at most once per rendered frame.
