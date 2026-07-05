@@ -36,6 +36,7 @@
 #include "shader.h"
 #include <d3dx8tex.h>
 #include <map>
+#include <utility>
 
 CMaterialViewerFrame *CMaterialViewerFrame::_TheInstance = nullptr;
 
@@ -51,6 +52,14 @@ namespace
 
 	// Preview pane takes this share of the client width; the panel gets the rest.
 	const float PREVIEW_WIDTH_RATIO = 0.55F;
+
+	// Floor for the file-tab strip across the top; the actual height comes from
+	// the Qt tab bar's style/font (GetTabBarPreferredHeight).
+	const int MIN_TAB_BAR_HEIGHT = 26;
+
+	// Tab-bar interaction deferred out of the Qt signal stack (see the thunks).
+	// wparam = tab index, lparam = 0 for select / 1 for close-button.
+	const UINT WM_MATVIEWER_TAB_ACTION = WM_USER + 0x41;
 
 	// Longest edge of the texture thumbnails shown in the panel's Textures tab.
 	const int TEXTURE_PREVIEW_MAX_DIM = 96;
@@ -193,6 +202,8 @@ BEGIN_MESSAGE_MAP(CMaterialViewerFrame, CFrameWnd)
 	ON_COMMAND(IDM_SHADER_BACKFACE_TINT, OnShaderBackfaceTint)
 	ON_UPDATE_COMMAND_UI(IDM_SHADER_BACKFACE_TINT, OnUpdateShaderBackfaceTint)
 	ON_COMMAND(IDM_SHADER_BACKFACE_TINT_COLOR, OnShaderBackfaceTintColor)
+	ON_WM_DROPFILES()
+	ON_MESSAGE(WM_MATVIEWER_TAB_ACTION, OnTabAction)
 	ON_MESSAGE(WM_W3DVIEW_THEME_CHANGED, OnThemeChanged)
 END_MESSAGE_MAP()
 
@@ -291,10 +302,21 @@ void CMaterialViewerFrame::OnShaderBackfaceTintColor()
 CMaterialViewerFrame::CMaterialViewerFrame()
 	: m_Preview(nullptr),
 	  m_PanelWnd(nullptr),
-	  m_ShowFullObject(false),
-	  m_Dirty(false),
+	  m_TabBarWnd(nullptr),
+	  m_ActiveTab(-1),
 	  m_LivePreviewPending(false)
 {
+}
+
+MaterialViewerTab &
+CMaterialViewerFrame::Active()
+{
+	static MaterialViewerTab s_scratch;
+	if (m_ActiveTab < 0 || m_ActiveTab >= (int)m_Tabs.size()) {
+		s_scratch = MaterialViewerTab();
+		return s_scratch;
+	}
+	return m_Tabs[m_ActiveTab];
 }
 
 CMaterialViewerFrame::~CMaterialViewerFrame()
@@ -336,48 +358,63 @@ CMaterialViewerFrame::ShowViewerForAsset(const char *objName, const char *source
 
 	CMaterialViewerFrame *frame = _TheInstance;
 
+	MaterialViewerTab tab;
 	bool parsed = false;
 	if (sourceFile != nullptr && sourceFile[0] != '\0') {
-		parsed = W3dMaterialViewer::ParseMaterialDocumentFromFactory(sourceFile, frame->m_Document);
+		parsed = W3dMaterialViewer::ParseMaterialDocumentFromFactory(sourceFile, tab.document);
 	}
+
+	// If the file (or, for source-less assets, the same top-level object) is
+	// already open in a tab, switch to it instead of opening a duplicate.
+	int existing = -1;
 	if (parsed) {
-		Fill_Texture_Previews(frame->m_Document);
-		frame->m_SourceFilePath = frame->m_Document.resolvedDiskPath;
+		tab.sourceFilePath = tab.document.resolvedDiskPath;
+		existing = frame->FindTab(tab.sourceFilePath.c_str());
 	} else {
-		frame->m_SourceFilePath.clear();
+		for (size_t i = 0; i < frame->m_Tabs.size(); i++) {
+			if (frame->m_Tabs[i].sourceFilePath.empty()
+					&& ::_stricmp(frame->m_Tabs[i].topLevelName.c_str(), objName) == 0) {
+				existing = (int)i;
+				break;
+			}
+		}
 	}
-	frame->m_Dirty = false;
+	if (existing >= 0) {
+		if (existing != frame->m_ActiveTab) {
+			if (!frame->PromptSaveIfDirty()) {
+				return;
+			}
+			frame->ActivateTab(existing);
+		}
+		if (meshName != nullptr && meshName[0] != '\0') {
+			frame->Active().currentMeshName = meshName;
+#ifdef W3DVIEW_HAS_QT
+			W3dMaterialViewer::SelectPanelMesh(meshName);
+#endif
+			frame->UpdatePreviewModel();
+		}
+		return;
+	}
+
+	if (parsed) {
+		Fill_Texture_Previews(tab.document);
+	}
 
 	// The full object is the parsed HLod when available, else the clicked asset.
-	frame->m_TopLevelName = (parsed && !frame->m_Document.topLevelName.empty())
-		? frame->m_Document.topLevelName : objName;
+	tab.topLevelName = (parsed && !tab.document.topLevelName.empty())
+		? tab.document.topLevelName : objName;
 	if (meshName != nullptr && meshName[0] != '\0') {
-		frame->m_CurrentMeshName = meshName;
-	} else if (parsed && !frame->m_Document.meshes.empty()) {
-		frame->m_CurrentMeshName = frame->m_Document.meshes.front().meshName;
+		tab.currentMeshName = meshName;
+	} else if (parsed && !tab.document.meshes.empty()) {
+		tab.currentMeshName = tab.document.meshes.front().meshName;
 	} else {
-		frame->m_CurrentMeshName = objName;
+		tab.currentMeshName = objName;
 	}
 
-#ifdef W3DVIEW_HAS_QT
-	if (frame->m_PanelWnd != nullptr) {
-		W3dMaterialViewer::SetPanelDocument(frame->m_Document);
-		if (parsed && meshName != nullptr && meshName[0] != '\0') {
-			W3dMaterialViewer::SelectPanelMesh(meshName);
-		}
-		frame->ReassertLayout();
+	if (!frame->PromptSaveIfDirty()) {
+		return;
 	}
-#endif
-
-	frame->UpdatePreviewModel();
-
-	if (parsed) {
-		frame->UpdateTitle();
-	} else {
-		CString title;
-		title.Format("W3D Material Viewer - %s (source file not found)", objName);
-		frame->SetWindowText(title);
-	}
+	frame->AppendTabAndActivate(tab);
 }
 
 void
@@ -422,6 +459,17 @@ CMaterialViewerFrame::PreTranslateMessage(MSG *msg)
 	// they work regardless of whether focus is in the Qt panel or the preview.
 	if (msg->message == WM_KEYDOWN && (::GetKeyState(VK_CONTROL) & 0x8000)) {
 		const bool shift = (::GetKeyState(VK_SHIFT) & 0x8000) != 0;
+
+		// Ctrl+Tab / Ctrl+Shift+Tab cycle through the file tabs (wrapping).
+		// Goes through OnTabChanged so unsaved edits get the same
+		// Save/Discard/Cancel prompt as a tab-strip click.
+		if (msg->wParam == VK_TAB && m_Tabs.size() > 1) {
+			const int count = (int)m_Tabs.size();
+			OnTabChanged(shift ? (m_ActiveTab - 1 + count) % count
+				: (m_ActiveTab + 1) % count);
+			return TRUE;
+		}
+
 		UINT command = 0;
 		switch (msg->wParam) {
 			case 'S': command = IDM_MATVIEWER_SAVE; break;
@@ -465,6 +513,12 @@ CMaterialViewerFrame::OnCreate(LPCREATESTRUCT create_struct)
 
 #ifdef W3DVIEW_HAS_QT
 	m_PanelWnd = W3dMaterialViewer::CreatePanel(m_hWnd);
+	m_TabBarWnd = W3dMaterialViewer::CreateTabBar(m_hWnd);
+	if (m_TabBarWnd != nullptr) {
+		W3dMaterialViewer::SetTabBarChangedCallback(&CMaterialViewerFrame::TabChangedThunk);
+		W3dMaterialViewer::SetTabBarCloseRequestedCallback(&CMaterialViewerFrame::TabCloseRequestedThunk);
+		::ShowWindow(m_TabBarWnd, SW_HIDE);	// shown once the first tab opens
+	}
 	W3dMaterialViewer::SetPanelMeshSelectedCallback(&CMaterialViewerFrame::PanelMeshSelectedThunk);
 	W3dMaterialViewer::SetPanelEditGateCallback(&CMaterialViewerFrame::EditGateThunk);
 	W3dMaterialViewer::SetPanelSaveCallback(&CMaterialViewerFrame::SaveThunk);
@@ -491,6 +545,9 @@ CMaterialViewerFrame::OnCreate(LPCREATESTRUCT create_struct)
 			view->Allow_Update(false);
 		}
 	}
+
+	// Accept .w3d files dropped anywhere on the window (each opens as a tab).
+	DragAcceptFiles(TRUE);
 
 	W3DDarkMode::ApplyToWindow(m_hWnd);
 	ApplyPanelTheme();
@@ -529,6 +586,12 @@ CMaterialViewerFrame::OnDestroy()
 	KillTimer(LIVE_PREVIEW_TIMER);	// no late live-preview fire after teardown
 
 #ifdef W3DVIEW_HAS_QT
+	if (m_TabBarWnd != nullptr) {
+		W3dMaterialViewer::SetTabBarChangedCallback(nullptr);
+		W3dMaterialViewer::SetTabBarCloseRequestedCallback(nullptr);
+		W3dMaterialViewer::DestroyTabBar();
+		m_TabBarWnd = nullptr;
+	}
 	if (m_PanelWnd != nullptr) {
 		W3dMaterialViewer::DestroyPanel();
 		m_PanelWnd = nullptr;
@@ -599,10 +662,24 @@ CMaterialViewerFrame::ReassertLayout()
 void
 CMaterialViewerFrame::Layout(int cx, int cy)
 {
+	// File-tab strip across the top, shown only while tabs are open.
+	int tab_height = 0;
+#ifdef W3DVIEW_HAS_QT
+	if (m_TabBarWnd != nullptr && HasTabs()) {
+		tab_height = W3dMaterialViewer::GetTabBarPreferredHeight();
+		if (tab_height < MIN_TAB_BAR_HEIGHT) {
+			tab_height = MIN_TAB_BAR_HEIGHT;
+		}
+		W3dMaterialViewer::ResizeTabBar(cx, tab_height);
+		::MoveWindow(m_TabBarWnd, 0, 0, cx, tab_height, TRUE);
+	}
+#endif
+
+	int body_height = cy - tab_height;
 	int preview_width = (int)(cx * PREVIEW_WIDTH_RATIO);
 
 	if ((m_Preview != nullptr) && ::IsWindow(m_Preview->m_hWnd)) {
-		m_Preview->MoveWindow(0, 0, preview_width, cy);
+		m_Preview->MoveWindow(0, tab_height, preview_width, body_height);
 	}
 
 	if (m_PanelWnd != nullptr) {
@@ -610,71 +687,335 @@ CMaterialViewerFrame::Layout(int cx, int cy)
 		// Resize through Qt first so its logical geometry/layout match; the
 		// MoveWindow then pins the child's position (Qt may have placed it at
 		// a stale pre-reparent position).
-		W3dMaterialViewer::ResizePanel(cx - preview_width, cy);
+		W3dMaterialViewer::ResizePanel(cx - preview_width, body_height);
 #endif
-		::MoveWindow(m_PanelWnd, preview_width, 0, cx - preview_width, cy, TRUE);
+		::MoveWindow(m_PanelWnd, preview_width, tab_height, cx - preview_width, body_height, TRUE);
 	} else if (::IsWindow(m_PlaceholderText.m_hWnd)) {
-		m_PlaceholderText.MoveWindow(preview_width, 0, cx - preview_width, cy);
+		m_PlaceholderText.MoveWindow(preview_width, tab_height, cx - preview_width, body_height);
 	}
 }
 
 void
 CMaterialViewerFrame::OnFileOpen()
 {
-	// Opening a new file discards the current one; guard unsaved edits first.
-	if (!PromptSaveIfDirty()) {
-		return;
-	}
-
 	CFileDialog dialog(TRUE, ".w3d", nullptr,
-		OFN_HIDEREADONLY | OFN_FILEMUSTEXIST,
+		OFN_HIDEREADONLY | OFN_FILEMUSTEXIST | OFN_ALLOWMULTISELECT,
 		"Westwood 3D Files (*.w3d)|*.w3d|All Files (*.*)|*.*||", this);
+
+	// Room for many selected paths; the default OPENFILENAME buffer holds one.
+	std::vector<char> path_buffer(32768, '\0');
+	dialog.m_ofn.lpstrFile = &path_buffer[0];
+	dialog.m_ofn.nMaxFile = (DWORD)path_buffer.size();
 
 	if (dialog.DoModal() != IDOK) {
 		return;
 	}
 
-	CString path = dialog.GetPathName();
-
-	// The panel always reflects the actual bytes of the chosen file.
-	if (W3dMaterialViewer::ParseMaterialDocument(path, m_Document) == false) {
-		::MessageBox(m_hWnd, "The file could not be read or contains no meshes.",
-			"W3D Material Viewer", MB_ICONEXCLAMATION | MB_OK);
-		return;
+	POSITION pos = dialog.GetStartPosition();
+	while (pos != nullptr) {
+		OpenFileInTab(dialog.GetNextPathName(pos));
 	}
-
-	m_SourceFilePath = (LPCTSTR)path;
-
-	// Load the assets through the document so texture-path handling and the
-	// asset tree stay consistent with a normal File->Open.
-	CW3DViewDoc *doc = ::GetCurrentDocument();
-	if (doc != nullptr) {
-		doc->LoadAssetsFromFile(path);
-	}
-
-	Fill_Texture_Previews(m_Document);
-
-	m_TopLevelName = m_Document.topLevelName;
-	m_CurrentMeshName = m_Document.meshes.empty() ? m_Document.topLevelName
-		: m_Document.meshes.front().meshName;
-
-#ifdef W3DVIEW_HAS_QT
-	if (m_PanelWnd != nullptr) {
-		W3dMaterialViewer::SetPanelDocument(m_Document);
-		ReassertLayout();
-	}
-#endif
-
-	UpdatePreviewModel();
-
-	m_Dirty = false;
-	UpdateTitle();
 }
 
 void
 CMaterialViewerFrame::OnFileClose()
 {
-	PostMessage(WM_CLOSE);
+	// Closes the active tab; the window itself goes when the last tab does.
+	if (HasTabs()) {
+		CloseTab(m_ActiveTab);
+	} else {
+		PostMessage(WM_CLOSE);
+	}
+}
+
+// Dropping .w3d files anywhere on the viewer opens each one as a tab (a file
+// that is already open just gets its tab activated). Other files are ignored.
+void
+CMaterialViewerFrame::OnDropFiles(HDROP drop)
+{
+	UINT count = ::DragQueryFile(drop, 0xFFFFFFFF, nullptr, 0);
+	for (UINT i = 0; i < count; i++) {
+		char path[MAX_PATH] = { 0 };
+		if (::DragQueryFile(drop, i, path, sizeof(path)) == 0) {
+			continue;
+		}
+		const char *ext = ::strrchr(path, '.');
+		if (ext == nullptr || ::_stricmp(ext, ".w3d") != 0) {
+			continue;
+		}
+		OpenFileInTab(path);
+	}
+	::DragFinish(drop);
+}
+
+////////////////////////////////////////////////////////////////////////////
+//	Tabs
+////////////////////////////////////////////////////////////////////////////
+
+int
+CMaterialViewerFrame::FindTab(const char *path) const
+{
+	if (path == nullptr || path[0] == '\0') {
+		return -1;
+	}
+	for (size_t i = 0; i < m_Tabs.size(); i++) {
+		if (::_stricmp(m_Tabs[i].sourceFilePath.c_str(), path) == 0) {
+			return (int)i;
+		}
+	}
+	return -1;
+}
+
+std::string
+CMaterialViewerFrame::TabLabel(const MaterialViewerTab &tab)
+{
+	std::string label;
+	if (!tab.sourceFilePath.empty()) {
+		const char *slash = ::strrchr(tab.sourceFilePath.c_str(), '\\');
+		const char *fwd = ::strrchr(tab.sourceFilePath.c_str(), '/');
+		if (fwd > slash) {
+			slash = fwd;
+		}
+		label = slash ? slash + 1 : tab.sourceFilePath.c_str();
+	} else if (!tab.topLevelName.empty()) {
+		label = tab.topLevelName;
+	} else {
+		label = "(untitled)";
+	}
+	if (tab.dirty) {
+		label += " *";
+	}
+	return label;
+}
+
+bool
+CMaterialViewerFrame::OpenFileInTab(const char *path, const char *meshName)
+{
+	if (path == nullptr || path[0] == '\0') {
+		return false;
+	}
+
+	int existing = FindTab(path);
+	if (existing >= 0) {
+		if (existing != m_ActiveTab) {
+			if (!PromptSaveIfDirty()) {
+				return false;
+			}
+			ActivateTab(existing);
+		}
+		if (meshName != nullptr && meshName[0] != '\0') {
+			Active().currentMeshName = meshName;
+#ifdef W3DVIEW_HAS_QT
+			W3dMaterialViewer::SelectPanelMesh(meshName);
+#endif
+			UpdatePreviewModel();
+		}
+		return true;
+	}
+
+	// The panel always reflects the actual bytes of the chosen file.
+	MaterialViewerTab tab;
+	if (W3dMaterialViewer::ParseMaterialDocument(path, tab.document) == false) {
+		CString message;
+		message.Format("%s\n\nThe file could not be read or contains no meshes.", path);
+		::MessageBox(m_hWnd, message, "W3D Material Viewer", MB_ICONEXCLAMATION | MB_OK);
+		return false;
+	}
+
+	if (!PromptSaveIfDirty()) {
+		return false;
+	}
+
+	tab.sourceFilePath = path;
+	Fill_Texture_Previews(tab.document);
+	tab.topLevelName = tab.document.topLevelName;
+	if (meshName != nullptr && meshName[0] != '\0') {
+		tab.currentMeshName = meshName;
+	} else {
+		tab.currentMeshName = tab.document.meshes.empty() ? tab.document.topLevelName
+			: tab.document.meshes.front().meshName;
+	}
+
+	AppendTabAndActivate(tab);
+	return true;
+}
+
+void
+CMaterialViewerFrame::AppendTabAndActivate(MaterialViewerTab &tab)
+{
+	m_Tabs.push_back(std::move(tab));
+	ActivateTab((int)m_Tabs.size() - 1);
+}
+
+void
+CMaterialViewerFrame::SnapshotActiveTab()
+{
+	if (m_ActiveTab < 0 || m_ActiveTab >= (int)m_Tabs.size()) {
+		return;
+	}
+	MaterialViewerTab &tab = m_Tabs[m_ActiveTab];
+	if (m_Preview != nullptr) {
+		m_Preview->Get_Camera_State(tab.cameraTransform, tab.cameraCenter,
+			tab.cameraRotation, tab.cameraDistance, tab.cameraMinZoomAdjust);
+		tab.cameraValid = true;
+	}
+}
+
+void
+CMaterialViewerFrame::ActivateTab(int index)
+{
+	if (index < 0 || index >= (int)m_Tabs.size()) {
+		return;
+	}
+
+	SnapshotActiveTab();
+	m_ActiveTab = index;
+	MaterialViewerTab &tab = m_Tabs[index];
+
+#ifdef W3DVIEW_HAS_QT
+	if (m_PanelWnd != nullptr) {
+		W3dMaterialViewer::SetPanelDocument(tab.document);
+		if (!tab.currentMeshName.empty()) {
+			W3dMaterialViewer::SelectPanelMesh(tab.currentMeshName.c_str());
+		}
+	}
+#endif
+
+	// Different files can carry identically-named prototypes (Load_3D_Assets
+	// silently skips duplicates), so reload this file's assets to guarantee
+	// the preview shows ITS bytes. Ends with UpdatePreviewModel; a source-less
+	// tab (asset straight from the tree) just re-targets the preview.
+	if (!tab.sourceFilePath.empty()) {
+		ReloadAssetsForPreview();
+	} else {
+		UpdatePreviewModel();
+	}
+
+	// Restore this tab's saved view. Must come after the model load above,
+	// which re-frames the camera whenever the loaded name changes.
+	if (tab.cameraValid && m_Preview != nullptr) {
+		m_Preview->Set_Camera_State(tab.cameraTransform, tab.cameraCenter,
+			tab.cameraRotation, tab.cameraDistance, tab.cameraMinZoomAdjust);
+	}
+
+	RebuildTabBar();
+	UpdateTitle();
+}
+
+bool
+CMaterialViewerFrame::CloseTab(int index)
+{
+	if (index < 0 || index >= (int)m_Tabs.size()) {
+		return true;
+	}
+
+	// Only the active tab can hold unsaved edits (switching away prompts).
+	if (index == m_ActiveTab && !PromptSaveIfDirty()) {
+		return false;
+	}
+
+	m_Tabs.erase(m_Tabs.begin() + index);
+
+	if (m_Tabs.empty()) {
+		m_ActiveTab = -1;
+		RebuildTabBar();
+		PostMessage(WM_CLOSE);
+		return true;
+	}
+
+	if (index < m_ActiveTab) {
+		// Indices above the erased tab shift down; the active file is unchanged.
+		m_ActiveTab--;
+		RebuildTabBar();
+	} else if (index == m_ActiveTab) {
+		// The active tab went away: show its right-hand neighbour (or the new
+		// last tab). Invalidate first so ActivateTab does not snapshot the
+		// camera into whatever tab now occupies the dead tab's index.
+		m_ActiveTab = -1;
+		ActivateTab((index < (int)m_Tabs.size()) ? index : (int)m_Tabs.size() - 1);
+	} else {
+		RebuildTabBar();
+	}
+	return true;
+}
+
+void
+CMaterialViewerFrame::RebuildTabBar()
+{
+#ifdef W3DVIEW_HAS_QT
+	if (m_TabBarWnd == nullptr) {
+		return;
+	}
+
+	std::vector<std::string> labels;
+	std::vector<const char *> label_ptrs;
+	std::vector<const char *> tip_ptrs;
+	labels.reserve(m_Tabs.size());
+	for (size_t i = 0; i < m_Tabs.size(); i++) {
+		labels.push_back(TabLabel(m_Tabs[i]));
+	}
+	for (size_t i = 0; i < m_Tabs.size(); i++) {
+		label_ptrs.push_back(labels[i].c_str());
+		tip_ptrs.push_back(m_Tabs[i].sourceFilePath.c_str());
+	}
+
+	W3dMaterialViewer::SetTabBarTabs(
+		label_ptrs.empty() ? nullptr : &label_ptrs[0],
+		tip_ptrs.empty() ? nullptr : &tip_ptrs[0],
+		(int)m_Tabs.size(), m_ActiveTab);
+
+	::ShowWindow(m_TabBarWnd, HasTabs() ? SW_SHOW : SW_HIDE);
+	ReassertLayout();
+#endif
+}
+
+void
+CMaterialViewerFrame::OnTabChanged(int index)
+{
+	if (index == m_ActiveTab || index < 0 || index >= (int)m_Tabs.size()) {
+		return;
+	}
+	if (!PromptSaveIfDirty()) {
+		// Cancelled: snap the strip's selection back to the active tab.
+#ifdef W3DVIEW_HAS_QT
+		W3dMaterialViewer::SetTabBarCurrent(m_ActiveTab);
+#endif
+		return;
+	}
+	ActivateTab(index);
+}
+
+void
+CMaterialViewerFrame::OnTabCloseRequested(int index)
+{
+	CloseTab(index);
+}
+
+LRESULT
+CMaterialViewerFrame::OnTabAction(WPARAM wparam, LPARAM lparam)
+{
+	if (lparam == 0) {
+		OnTabChanged((int)wparam);
+	} else {
+		OnTabCloseRequested((int)wparam);
+	}
+	return 0;
+}
+
+void
+CMaterialViewerFrame::TabChangedThunk(int index)
+{
+	if (_TheInstance != nullptr && ::IsWindow(_TheInstance->m_hWnd)) {
+		_TheInstance->PostMessage(WM_MATVIEWER_TAB_ACTION, (WPARAM)index, 0);
+	}
+}
+
+void
+CMaterialViewerFrame::TabCloseRequestedThunk(int index)
+{
+	if (_TheInstance != nullptr && ::IsWindow(_TheInstance->m_hWnd)) {
+		_TheInstance->PostMessage(WM_MATVIEWER_TAB_ACTION, (WPARAM)index, 1);
+	}
 }
 
 ////////////////////////////////////////////////////////////////////////////
@@ -767,12 +1108,14 @@ CMaterialViewerFrame::UpdatePreviewModel()
 		return;
 	}
 
-	const std::string &name = (m_ShowFullObject && !m_TopLevelName.empty())
-		? m_TopLevelName : m_CurrentMeshName;
+	MaterialViewerTab &tab = Active();
+
+	const std::string &name = (tab.showFullObject && !tab.topLevelName.empty())
+		? tab.topLevelName : tab.currentMeshName;
 
 	if (!name.empty() && m_Preview->LoadModel(name.c_str()) == false) {
 		// Fall back to the other candidate before giving up silently.
-		const std::string &other = m_ShowFullObject ? m_CurrentMeshName : m_TopLevelName;
+		const std::string &other = tab.showFullObject ? tab.currentMeshName : tab.topLevelName;
 		if (!other.empty()) {
 			m_Preview->LoadModel(other.c_str());
 		}
@@ -781,24 +1124,24 @@ CMaterialViewerFrame::UpdatePreviewModel()
 	// A freshly loaded render object comes from the pristine prototype; if the
 	// user has unsaved edits, re-stamp them so switching meshes / toggling the
 	// full-object view keeps showing the in-progress material changes. The
-	// panel's latest edits live in m_LivePreviewDoc (m_Document only updates on
+	// panel's latest edits live in livePreviewDoc (document only updates on
 	// save), so prefer it while dirty.
-	if (m_Dirty) {
-		m_Preview->ApplyLiveMaterials(m_LivePreviewDoc);
+	if (tab.dirty) {
+		m_Preview->ApplyLiveMaterials(tab.livePreviewDoc);
 	}
 }
 
 void
 CMaterialViewerFrame::OnShowFullObject()
 {
-	m_ShowFullObject = !m_ShowFullObject;
+	Active().showFullObject = !Active().showFullObject;
 	UpdatePreviewModel();
 }
 
 void
 CMaterialViewerFrame::OnUpdateShowFullObject(CCmdUI *cmd_ui)
 {
-	cmd_ui->SetCheck(m_ShowFullObject ? 1 : 0);
+	cmd_ui->SetCheck(Active().showFullObject ? 1 : 0);
 }
 
 void
@@ -807,8 +1150,8 @@ CMaterialViewerFrame::OnPanelMeshSelected(const char *meshName)
 	if (meshName == nullptr || meshName[0] == '\0') {
 		return;
 	}
-	m_CurrentMeshName = meshName;
-	if (!m_ShowFullObject) {
+	Active().currentMeshName = meshName;
+	if (!Active().showFullObject) {
 		UpdatePreviewModel();
 	}
 }
@@ -828,19 +1171,25 @@ CMaterialViewerFrame::PanelMeshSelectedThunk(const char *meshName)
 void
 CMaterialViewerFrame::UpdateTitle()
 {
+	MaterialViewerTab &tab = Active();
+
 	CString title;
-	if (m_SourceFilePath.empty()) {
+	if (!HasTabs()) {
 		title = "W3D Material Viewer";
+	} else if (tab.sourceFilePath.empty()) {
+		// Asset opened from the tree whose .w3d could not be located on disk.
+		title.Format("W3D Material Viewer - %s (source file not found)", tab.topLevelName.c_str());
 	} else {
-		const char *slash = ::strrchr(m_SourceFilePath.c_str(), '\\');
-		const char *fwd = ::strrchr(m_SourceFilePath.c_str(), '/');
-		if (fwd > slash) {
-			slash = fwd;
-		}
-		const char *name = slash ? slash + 1 : m_SourceFilePath.c_str();
-		title.Format("W3D Material Viewer - %s%s", name, m_Dirty ? " *" : "");
+		title.Format("W3D Material Viewer - %s", TabLabel(tab).c_str());
 	}
 	SetWindowText(title);
+
+	// Keep the active tab's caption (and its dirty '*') in sync too.
+#ifdef W3DVIEW_HAS_QT
+	if (m_TabBarWnd != nullptr && m_ActiveTab >= 0 && m_ActiveTab < (int)m_Tabs.size()) {
+		W3dMaterialViewer::SetTabBarLabel(m_ActiveTab, TabLabel(tab).c_str());
+	}
+#endif
 }
 
 // The panel runs this before entering edit mode: refuse to edit any file we
@@ -848,7 +1197,7 @@ CMaterialViewerFrame::UpdateTitle()
 bool
 CMaterialViewerFrame::RunEditGate()
 {
-	if (m_SourceFilePath.empty()) {
+	if (Active().sourceFilePath.empty()) {
 		::MessageBox(m_hWnd,
 			"This asset's source .w3d file could not be located on disk, so it cannot be edited.",
 			"W3D Material Viewer", MB_ICONEXCLAMATION | MB_OK);
@@ -856,7 +1205,7 @@ CMaterialViewerFrame::RunEditGate()
 	}
 
 	std::string error;
-	if (!W3dMaterialViewer::ChunkTreeRoundTripsIdentically(m_SourceFilePath.c_str(), error)) {
+	if (!W3dMaterialViewer::ChunkTreeRoundTripsIdentically(Active().sourceFilePath.c_str(), error)) {
 		CString message;
 		message.Format("This file cannot be edited safely:\n\n%s\n\n"
 			"Editing is disabled to avoid corrupting it.", error.c_str());
@@ -879,8 +1228,8 @@ CMaterialViewerFrame::SaveDocument(const W3dMaterialViewer::MaterialDocument &do
 	}
 
 	// Keep our working copy in sync with what is now on disk.
-	m_Document = document;
-	m_Dirty = false;
+	Active().document = document;
+	Active().dirty = false;
 
 	ReloadAssetsForPreview();
 	UpdateTitle();
@@ -890,28 +1239,29 @@ CMaterialViewerFrame::SaveDocument(const W3dMaterialViewer::MaterialDocument &do
 void
 CMaterialViewerFrame::RevertDocument()
 {
-	if (m_SourceFilePath.empty()) {
+	MaterialViewerTab &tab = Active();
+	if (tab.sourceFilePath.empty()) {
 		return;
 	}
 
 	W3dMaterialViewer::MaterialDocument fresh;
-	if (!W3dMaterialViewer::ParseMaterialDocument(m_SourceFilePath.c_str(), fresh)) {
+	if (!W3dMaterialViewer::ParseMaterialDocument(tab.sourceFilePath.c_str(), fresh)) {
 		return;
 	}
 
-	m_Document = fresh;
-	Fill_Texture_Previews(m_Document);
-	m_Dirty = false;
+	tab.document = fresh;
+	Fill_Texture_Previews(tab.document);
+	tab.dirty = false;
 
 #ifdef W3DVIEW_HAS_QT
 	if (m_PanelWnd != nullptr) {
-		W3dMaterialViewer::SetPanelDocument(m_Document);
+		W3dMaterialViewer::SetPanelDocument(tab.document);
 	}
 #endif
 
 	// The live preview still carries the reverted (edited) materials. Rebuild the
 	// render object from the untouched prototype so it returns to the original
-	// look; m_Dirty is now false so UpdatePreviewModel won't re-stamp any edits.
+	// look; the tab is now clean so UpdatePreviewModel won't re-stamp any edits.
 	UpdatePreviewModel();
 
 	UpdateTitle();
@@ -924,7 +1274,8 @@ CMaterialViewerFrame::RevertDocument()
 void
 CMaterialViewerFrame::ReloadAssetsForPreview()
 {
-	if (m_SourceFilePath.empty()) {
+	MaterialViewerTab &tab = Active();
+	if (tab.sourceFilePath.empty()) {
 		return;
 	}
 
@@ -936,18 +1287,18 @@ CMaterialViewerFrame::ReloadAssetsForPreview()
 
 	WW3DAssetManager *assets = WW3DAssetManager::Get_Instance();
 	if (assets != nullptr) {
-		for (const W3dMaterialViewer::MeshMaterialData &mesh : m_Document.meshes) {
+		for (const W3dMaterialViewer::MeshMaterialData &mesh : tab.document.meshes) {
 			assets->Remove_Prototype(mesh.meshName.c_str());
 		}
-		if (!m_Document.topLevelName.empty()) {
-			assets->Remove_Prototype(m_Document.topLevelName.c_str());
+		if (!tab.document.topLevelName.empty()) {
+			assets->Remove_Prototype(tab.document.topLevelName.c_str());
 		}
 		assets->Release_Unused_Textures();
 	}
 
 	CW3DViewDoc *doc = ::GetCurrentDocument();
 	if (doc != nullptr) {
-		doc->LoadAssetsFromFile(m_SourceFilePath.c_str());
+		doc->LoadAssetsFromFile(tab.sourceFilePath.c_str());
 	}
 
 	UpdatePreviewModel();
@@ -1001,7 +1352,7 @@ CMaterialViewerFrame::RevertThunk()
 void
 CMaterialViewerFrame::OnPanelDirtyChanged(bool dirty)
 {
-	m_Dirty = dirty;
+	Active().dirty = dirty;
 	UpdateTitle();
 }
 
@@ -1021,7 +1372,7 @@ CMaterialViewerFrame::OnPanelLivePreview(const W3dMaterialViewer::MaterialDocume
 	if (m_Preview == nullptr || !::IsWindow(m_hWnd)) {
 		return;
 	}
-	m_LivePreviewDoc = document;
+	Active().livePreviewDoc = document;
 	m_LivePreviewPending = true;
 	SetTimer(LIVE_PREVIEW_TIMER, LIVE_PREVIEW_DELAY_MS, nullptr);	// restart
 }
@@ -1041,7 +1392,7 @@ CMaterialViewerFrame::OnTimer(UINT_PTR event_id)
 		KillTimer(LIVE_PREVIEW_TIMER);
 		if (m_LivePreviewPending && m_Preview != nullptr) {
 			m_LivePreviewPending = false;
-			m_Preview->ApplyLiveMaterials(m_LivePreviewDoc);
+			m_Preview->ApplyLiveMaterials(Active().livePreviewDoc);
 		}
 		return;
 	}

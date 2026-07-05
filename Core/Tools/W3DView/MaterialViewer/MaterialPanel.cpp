@@ -69,6 +69,7 @@
 #include <QtWidgets/QStackedWidget>
 #include <QtWidgets/QStyle>
 #include <QtWidgets/QStyleFactory>
+#include <QtWidgets/QTabBar>
 #include <QtWidgets/QTabWidget>
 #include <QtWidgets/QToolButton>
 #include <QtWidgets/QUndoCommand>
@@ -100,6 +101,12 @@ void (*g_LivePreviewCallback)(const MaterialDocument &) = nullptr;
 // Sticky Raw/Table choice for the mapper-args editor, so the mode survives a
 // page rebuild (e.g. undo/redo, which re-runs Show_Mesh). false = Raw.
 bool g_ArgsTableMode = false;
+
+// File tab bar host callbacks (see MaterialPanel.h). Fired only for USER
+// interaction; g_TabBarUpdating suppresses them during programmatic updates.
+void (*g_TabChangedCallback)(int) = nullptr;
+void (*g_TabCloseRequestedCallback)(int) = nullptr;
+bool g_TabBarUpdating = false;
 
 //////////////////////////////////////////////////////////////////////////////
 //	Field help -> status strip
@@ -2388,6 +2395,9 @@ QApplication *g_Application = nullptr;
 MaterialPanelWidget *g_Panel = nullptr;
 bool g_ApplicationFailed = false;
 
+// File tab bar (see CreateTabBar). Owned separately from the material panel.
+QTabBar *g_TabBar = nullptr;
+
 bool Ensure_Application()
 {
 	if (g_Application != nullptr) {
@@ -2467,6 +2477,169 @@ void DestroyPanel()
 HWND GetPanelHwnd()
 {
 	return (g_Panel != nullptr) ? (HWND)g_Panel->winId() : nullptr;
+}
+
+//////////////////////////////////////////////////////////////////////////////
+//	File tab bar (MaterialPanel.h)
+//////////////////////////////////////////////////////////////////////////////
+
+// The Fusion style's built-in close-tab indicator is a fixed dark glyph that
+// all but disappears on a dark tab bar, so each tab carries its own close
+// QToolButton with a cross drawn in the current palette's text colour.
+static QIcon Make_Tab_Close_Icon()
+{
+	const QColor color = QApplication::palette().color(QPalette::WindowText);
+	QPixmap pixmap(16, 16);
+	pixmap.fill(Qt::transparent);
+	{
+		QPainter painter(&pixmap);
+		painter.setRenderHint(QPainter::Antialiasing, true);
+		painter.setPen(QPen(color, 1.4));
+		painter.drawLine(QPointF(5.0, 5.0), QPointF(11.0, 11.0));
+		painter.drawLine(QPointF(11.0, 5.0), QPointF(5.0, 11.0));
+	}
+	return QIcon(pixmap);
+}
+
+// Re-tints every tab's close cross after a theme switch (ApplyPanelTheme).
+static void Refresh_Tab_Close_Icons()
+{
+	if (g_TabBar == nullptr) {
+		return;
+	}
+	QIcon icon = Make_Tab_Close_Icon();
+	for (int i = 0; i < g_TabBar->count(); i++) {
+		QToolButton *button = qobject_cast<QToolButton *>(
+			g_TabBar->tabButton(i, QTabBar::RightSide));
+		if (button != nullptr) {
+			button->setIcon(icon);
+		}
+	}
+}
+
+HWND CreateTabBar(HWND parent)
+{
+	if (!Ensure_Application()) {
+		return nullptr;
+	}
+
+	if (g_TabBar == nullptr) {
+		g_TabBar = new QTabBar;
+		g_TabBar->setExpanding(false);
+		g_TabBar->setUsesScrollButtons(true);
+		g_TabBar->setElideMode(Qt::ElideMiddle);
+		// No keyboard focus: the MFC frame's PreTranslateMessage only routes
+		// keys to the panel, and the mouse is enough for a tab strip.
+		g_TabBar->setFocusPolicy(Qt::NoFocus);
+		g_TabBar->setDrawBase(false);
+		QObject::connect(g_TabBar, &QTabBar::currentChanged, [](int index) {
+			if (!g_TabBarUpdating && g_TabChangedCallback != nullptr) {
+				g_TabChangedCallback(index);
+			}
+		});
+	}
+
+	// Same reparenting dance as CreatePanel: Qt must consider the window
+	// frameless BEFORE the native window exists, or its geometry math keeps
+	// top-level frame margins after the re-parent.
+	g_TabBar->setWindowFlags(g_TabBar->windowFlags() | Qt::FramelessWindowHint);
+
+	HWND hwnd = (HWND)g_TabBar->winId();
+	::SetParent(hwnd, parent);
+	LONG style = ::GetWindowLong(hwnd, GWL_STYLE);
+	style &= ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME);
+	style |= WS_CHILD;
+	::SetWindowLong(hwnd, GWL_STYLE, style);
+
+	g_TabBar->setAttribute(Qt::WA_Resized, true);
+	g_TabBar->show();
+	return hwnd;
+}
+
+void DestroyTabBar()
+{
+	if (g_TabBar != nullptr) {
+		delete g_TabBar;
+		g_TabBar = nullptr;
+	}
+}
+
+void ResizeTabBar(int width, int height)
+{
+	if (g_TabBar != nullptr) {
+		g_TabBar->resize(width, height);
+	}
+}
+
+int GetTabBarPreferredHeight()
+{
+	return (g_TabBar != nullptr) ? g_TabBar->sizeHint().height() : 0;
+}
+
+void SetTabBarTabs(const char *const *labels, const char *const *tooltips,
+	int count, int active)
+{
+	if (g_TabBar == nullptr) {
+		return;
+	}
+
+	g_TabBarUpdating = true;
+	while (g_TabBar->count() > 0) {
+		g_TabBar->removeTab(0);
+	}
+	QIcon close_icon = Make_Tab_Close_Icon();
+	for (int i = 0; i < count; i++) {
+		g_TabBar->addTab(QString::fromLocal8Bit(labels[i]));
+		if (tooltips != nullptr && tooltips[i] != nullptr && tooltips[i][0] != '\0') {
+			g_TabBar->setTabToolTip(i, QString::fromLocal8Bit(tooltips[i]));
+		}
+
+		// The captured index stays valid: every tab-list change rebuilds the
+		// bar (and with it these buttons) through this function.
+		QToolButton *close_button = new QToolButton(g_TabBar);
+		close_button->setAutoRaise(true);
+		close_button->setFocusPolicy(Qt::NoFocus);
+		close_button->setIcon(close_icon);
+		close_button->setIconSize(QSize(16, 16));
+		close_button->setFixedSize(18, 18);
+		close_button->setToolTip(QStringLiteral("Close"));
+		QObject::connect(close_button, &QToolButton::clicked, [i]() {
+			if (!g_TabBarUpdating && g_TabCloseRequestedCallback != nullptr) {
+				g_TabCloseRequestedCallback(i);
+			}
+		});
+		g_TabBar->setTabButton(i, QTabBar::RightSide, close_button);
+	}
+	if (active >= 0 && active < count) {
+		g_TabBar->setCurrentIndex(active);
+	}
+	g_TabBarUpdating = false;
+}
+
+void SetTabBarLabel(int index, const char *label)
+{
+	if (g_TabBar != nullptr && index >= 0 && index < g_TabBar->count()) {
+		g_TabBar->setTabText(index, QString::fromLocal8Bit(label));
+	}
+}
+
+void SetTabBarCurrent(int index)
+{
+	if (g_TabBar != nullptr && index >= 0 && index < g_TabBar->count()) {
+		g_TabBarUpdating = true;
+		g_TabBar->setCurrentIndex(index);
+		g_TabBarUpdating = false;
+	}
+}
+
+void SetTabBarChangedCallback(void (*callback)(int index))
+{
+	g_TabChangedCallback = callback;
+}
+
+void SetTabBarCloseRequestedCallback(void (*callback)(int index))
+{
+	g_TabCloseRequestedCallback = callback;
 }
 
 // Qt colour picker bridged behind a Qt-free (COLORREF) signature. Uses the native
@@ -2597,6 +2770,7 @@ void ApplyPanelTheme(const PanelTheme &theme)
 	if (g_Panel != nullptr) {
 		g_Panel->Apply_Theme(theme);
 	}
+	Refresh_Tab_Close_Icons();
 }
 
 void PumpQtEvents()
@@ -2614,6 +2788,7 @@ void PumpQtEvents()
 void ShutdownQt()
 {
 	DestroyPanel();
+	DestroyTabBar();
 	if (g_Application != nullptr) {
 		delete g_Application;
 		g_Application = nullptr;

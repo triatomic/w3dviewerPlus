@@ -24,9 +24,40 @@
 
 #pragma once
 
+#include <string>
+#include <vector>
+
+#include "vector3.h"
+#include "quat.h"
+#include "matrix3d.h"
 #include "W3dMaterialData.h"
 
 class CMaterialPreviewPane;
+
+// TheSuperHackers @feature Several .w3d files open at once, one tab per file.
+// The preview pane and the Qt panel are shared between tabs; this struct holds
+// everything that is per-file. Only the ACTIVE tab can be dirty: switching away
+// from unsaved edits prompts Save/Discard/Cancel first (the panel's edit
+// session — undo stack included — cannot survive a document swap).
+struct MaterialViewerTab
+{
+	std::string							sourceFilePath;		// disk path (title / reload); may be empty
+	W3dMaterialViewer::MaterialDocument	document;			// parsed material chunks
+	W3dMaterialViewer::MaterialDocument	livePreviewDoc;		// latest in-flight edits (active tab only)
+	bool								dirty = false;
+
+	std::string							topLevelName;		// HLod / top render obj
+	std::string							currentMeshName;	// mesh shown in the preview
+	bool								showFullObject = false;
+
+	// Saved orbit camera so switching back to this tab restores its exact view.
+	bool								cameraValid = false;
+	Matrix3D							cameraTransform = Matrix3D(1);
+	Vector3								cameraCenter = Vector3(0, 0, 0);
+	Quaternion							cameraRotation = Quaternion(true);
+	float								cameraDistance = 0.0f;
+	float								cameraMinZoomAdjust = 0.0f;
+};
 
 class CMaterialViewerFrame : public CFrameWnd
 {
@@ -96,8 +127,19 @@ protected:
 	afx_msg void OnShaderBackfaceTint();
 	afx_msg void OnUpdateShaderBackfaceTint(CCmdUI *cmd_ui);
 	afx_msg void OnShaderBackfaceTintColor();
+	afx_msg void OnDropFiles(HDROP drop);
 	afx_msg LRESULT OnThemeChanged(WPARAM wparam, LPARAM lparam);
 	DECLARE_MESSAGE_MAP()
+
+	// Fired by the Qt tab bar for user interaction (never for programmatic
+	// updates). The thunks PostMessage the request to the frame and return, so
+	// the heavy work (dirty prompt, asset reload, tab-bar rebuild) never runs
+	// inside QTabBar's own mouse-event stack.
+	afx_msg LRESULT OnTabAction(WPARAM wparam, LPARAM lparam);
+	void OnTabChanged(int index);
+	void OnTabCloseRequested(int index);
+	static void TabChangedThunk(int index);
+	static void TabCloseRequestedThunk(int index);
 
 private:
 	void Layout(int cx, int cy);
@@ -134,24 +176,61 @@ private:
 
 	void UpdateTitle();
 
-	std::string m_SourceFilePath;	// disk path used for the title / reload
-	bool		m_Dirty;
+	//----- Tabs ----------------------------------------------------------------
 
-	// Debounced live-preview state: the latest edited document and whether a
-	// refresh timer is pending.
-	W3dMaterialViewer::MaterialDocument m_LivePreviewDoc;
-	bool		m_LivePreviewPending;
+	// Active-tab accessor. Returns a shared scratch tab when none is open so the
+	// panel callbacks (which can fire before the first file loads or after the
+	// last one closes) never index out of range — the scratch state is simply
+	// thrown away. Guard real work with HasTabs().
+	MaterialViewerTab &Active();
+	bool HasTabs() const { return !m_Tabs.empty(); }
+
+	// Opens `path` as a new tab, or switches to its tab if already open. Prompts
+	// for unsaved edits before leaving the current tab; returns false if the
+	// user cancelled or the file could not be parsed. `meshName` optionally
+	// pre-selects a mesh in the panel.
+	bool OpenFileInTab(const char *path, const char *meshName = nullptr);
+
+	// Tab-opening back end shared with ShowViewerForAsset (which may have no
+	// on-disk file). Appends `tab` and activates it.
+	void AppendTabAndActivate(MaterialViewerTab &tab);
+
+	// Makes `index` active: snapshots the outgoing tab's camera, reloads the
+	// incoming file's assets (files can contain identically-named prototypes,
+	// so the shared asset manager must hold THIS file's versions), feeds the
+	// panel and restores mesh selection + camera. Does NOT prompt for unsaved
+	// edits — callers do.
+	void ActivateTab(int index);
+
+	// Captures the preview camera into the active tab before a switch.
+	void SnapshotActiveTab();
+
+	// Closes tab `index` (prompting for unsaved edits when it is the active
+	// one); closes the whole window when the last tab goes. Returns false if
+	// the user cancelled.
+	bool CloseTab(int index);
+
+	// Mirrors m_Tabs into the Qt tab bar and relayouts (the strip shows only
+	// when at least one tab is open).
+	void RebuildTabBar();
+
+	// Index of the tab already showing `path` (case-insensitive), or -1.
+	int FindTab(const char *path) const;
+
+	// Tab caption: file name (or top-level asset name) plus a dirty '*'.
+	static std::string TabLabel(const MaterialViewerTab &tab);
 
 	static CMaterialViewerFrame *_TheInstance;
 
 	CMaterialPreviewPane	*m_Preview;
 	CStatic					m_PlaceholderText;	// shown where the Qt panel would be
 	HWND					m_PanelWnd;
-	W3dMaterialViewer::MaterialDocument m_Document;
+	HWND					m_TabBarWnd;		// Qt QTabBar hosted in the frame
 
-	// Preview shows the mesh selected in the panel by default; the View menu
-	// toggle switches to the whole object (HLod).
-	bool					m_ShowFullObject;
-	std::string				m_TopLevelName;
-	std::string				m_CurrentMeshName;
+	std::vector<MaterialViewerTab>	m_Tabs;
+	int						m_ActiveTab;		// index into m_Tabs, -1 when empty
+
+	// True while a refresh timer is pending for the debounced live preview
+	// (the pending document itself lives in the active tab).
+	bool					m_LivePreviewPending;
 };

@@ -26,6 +26,7 @@
 
 #include "vector3.h"
 #include "quat.h"
+#include "matrix3d.h"
 #include "sphere.h"
 #include "dx8wrapper.h"
 
@@ -65,6 +66,17 @@ public:
 	// Renders one frame into the swap chain. Must be called from the main
 	// thread, outside the main view's Begin_Render/End_Render bracket.
 	void Render();
+
+	// Save/restore the full orbit-camera state so each Material Viewer tab can
+	// keep its own view. Captures the raw camera transform plus the orbit
+	// accumulators (centre / rotation / distance / zoom step) verbatim, so a
+	// restore is exact regardless of how the view was reached. Set must run
+	// AFTER LoadModel (which re-frames the camera and sets model-appropriate
+	// clip planes that are deliberately left alone here).
+	void Get_Camera_State(Matrix3D &transform, Vector3 &center,
+		Quaternion &rotation, float &distance, float &minZoomAdjust) const;
+	void Set_Camera_State(const Matrix3D &transform, const Vector3 &center,
+		const Quaternion &rotation, float distance, float minZoomAdjust);
 
 	// DX8_CleanupHook: release device resources before a reset; recreation is
 	// lazy (Render recreates the swap chain when it is missing).

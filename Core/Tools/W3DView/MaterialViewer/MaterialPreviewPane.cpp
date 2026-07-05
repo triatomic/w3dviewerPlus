@@ -484,6 +484,30 @@ CMaterialPreviewPane::Reset_Camera_To_Sphere(const SphereClass &sphere)
 	m_ViewedSphere = sphere;
 }
 
+void
+CMaterialPreviewPane::Get_Camera_State(Matrix3D &transform, Vector3 &center,
+	Quaternion &rotation, float &distance, float &minZoomAdjust) const
+{
+	transform = (m_Camera != nullptr) ? m_Camera->Get_Transform() : Matrix3D(1);
+	center = m_SphereCenter;
+	rotation = m_Rotation;
+	distance = m_CameraDistance;
+	minZoomAdjust = m_MinZoomAdjust;
+}
+
+void
+CMaterialPreviewPane::Set_Camera_State(const Matrix3D &transform, const Vector3 &center,
+	const Quaternion &rotation, float distance, float minZoomAdjust)
+{
+	m_SphereCenter = center;
+	m_Rotation = rotation;
+	m_CameraDistance = distance;
+	m_MinZoomAdjust = minZoomAdjust;
+	if (m_Camera != nullptr) {
+		m_Camera->Set_Transform(transform);
+	}
+}
+
 // 3ds Max-style orbit (mirrors CGraphicView::Orbit_Camera): pitch about the
 // camera-local X and yaw about world Z through m_SphereCenter, both scaled to
 // the viewport so a full sweep is 360/180 degrees.

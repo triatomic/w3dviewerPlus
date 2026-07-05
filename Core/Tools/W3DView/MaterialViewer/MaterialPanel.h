@@ -123,6 +123,40 @@ void RequestPanelRevert();
 // selection changes; receives the mesh name. Pass null to clear.
 void SetPanelMeshSelectedCallback(void (*callback)(const char *meshName));
 
+//////////////////////////////////////////////////////////////////////////////
+//	File tab bar
+//
+// A QTabBar hosted as a WS_CHILD of the MFC frame (same reparenting dance as
+// the panel), so the Material Viewer's file tabs follow the Qt dark theme with
+// no owner-draw. One tab per open .w3d file; the host owns the tab list and
+// mirrors it in with SetTabBarTabs. Close buttons are shown on every tab; the
+// close request is forwarded to the host, which decides (dirty prompt) whether
+// the tab actually goes.
+
+HWND CreateTabBar(HWND parent);
+void DestroyTabBar();
+void ResizeTabBar(int width, int height);
+
+// Preferred strip height for the current style/font (0 when no tab bar).
+int GetTabBarPreferredHeight();
+
+// Replaces all tabs. `labels` are shown, `tooltips` (full paths, may be null)
+// appear on hover, `active` is the selected index. Emits no changed callback.
+void SetTabBarTabs(const char *const *labels, const char *const *tooltips,
+	int count, int active);
+
+// Updates one tab's label in place (dirty '*' marker) without rebuilding.
+void SetTabBarLabel(int index, const char *label);
+
+// Selection snapped back without going through SetTabBarTabs (e.g. a cancelled
+// switch). Emits no changed callback.
+void SetTabBarCurrent(int index);
+
+// Invoked (synchronously, on the UI thread) when the USER selects a different
+// tab / clicks a tab's close button. Programmatic updates never fire these.
+void SetTabBarChangedCallback(void (*callback)(int index));
+void SetTabBarCloseRequestedCallback(void (*callback)(int index));
+
 void ApplyPanelTheme(const PanelTheme &theme);
 
 // Delivers Qt posted events/timers. Qt's native child windows receive input
