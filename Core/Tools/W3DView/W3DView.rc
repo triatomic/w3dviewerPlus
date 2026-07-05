@@ -461,6 +461,11 @@ BEGIN
             MENUITEM "Back Face Tint Color...",     IDM_SHADER_BACKFACE_TINT_COLOR
         END
     END
+    POPUP "&Light"
+    BEGIN
+        MENUITEM "&Free Roam",                  IDM_MATVIEWER_LIGHT_FREEROAM
+        MENUITEM "&Per Face",                   IDM_MATVIEWER_LIGHT_PERFACE
+    END
 END
 
 IDR_LOD_MENU MENU DISCARDABLE

@@ -202,6 +202,10 @@ BEGIN_MESSAGE_MAP(CMaterialViewerFrame, CFrameWnd)
 	ON_COMMAND(IDM_SHADER_BACKFACE_TINT, OnShaderBackfaceTint)
 	ON_UPDATE_COMMAND_UI(IDM_SHADER_BACKFACE_TINT, OnUpdateShaderBackfaceTint)
 	ON_COMMAND(IDM_SHADER_BACKFACE_TINT_COLOR, OnShaderBackfaceTintColor)
+	ON_COMMAND(IDM_MATVIEWER_LIGHT_FREEROAM, OnLightFreeRoam)
+	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_LIGHT_FREEROAM, OnUpdateLightFreeRoam)
+	ON_COMMAND(IDM_MATVIEWER_LIGHT_PERFACE, OnLightPerFace)
+	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_LIGHT_PERFACE, OnUpdateLightPerFace)
 	ON_WM_DROPFILES()
 	ON_MESSAGE(WM_MATVIEWER_TAB_ACTION, OnTabAction)
 	ON_MESSAGE(WM_W3DVIEW_THEME_CHANGED, OnThemeChanged)
@@ -284,6 +288,38 @@ void CMaterialViewerFrame::OnShaderBackfaceTint()
 void CMaterialViewerFrame::OnUpdateShaderBackfaceTint(CCmdUI *cmd_ui)
 {
 	cmd_ui->SetCheck(CGraphicView::Is_Show_Backface_Tint() ? 1 : 0);
+}
+
+// TheSuperHackers @feature Light menu: how Ctrl+left-drag moves the preview's
+// scene light. Free Roam = the main viewport's trackball rotation; Per Face =
+// place the light on the surface point under the cursor. Persisted in the
+// profile; menu uses check marks (SetCheck) to match the surrounding items.
+void CMaterialViewerFrame::OnLightFreeRoam()
+{
+	if (m_Preview != nullptr) {
+		m_Preview->Set_Light_Placement_Mode(CMaterialPreviewPane::LIGHT_FREE_ROAM);
+	}
+	::AfxGetApp()->WriteProfileInt("Config", "MatViewerLightPerFace", 0);
+}
+
+void CMaterialViewerFrame::OnUpdateLightFreeRoam(CCmdUI *cmd_ui)
+{
+	cmd_ui->SetCheck((m_Preview != nullptr
+		&& m_Preview->Get_Light_Placement_Mode() == CMaterialPreviewPane::LIGHT_FREE_ROAM) ? 1 : 0);
+}
+
+void CMaterialViewerFrame::OnLightPerFace()
+{
+	if (m_Preview != nullptr) {
+		m_Preview->Set_Light_Placement_Mode(CMaterialPreviewPane::LIGHT_PER_FACE);
+	}
+	::AfxGetApp()->WriteProfileInt("Config", "MatViewerLightPerFace", 1);
+}
+
+void CMaterialViewerFrame::OnUpdateLightPerFace(CCmdUI *cmd_ui)
+{
+	cmd_ui->SetCheck((m_Preview != nullptr
+		&& m_Preview->Get_Light_Placement_Mode() == CMaterialPreviewPane::LIGHT_PER_FACE) ? 1 : 0);
 }
 
 // TheSuperHackers @feature Tria Pick the back-face tint colour via the Qt colour
@@ -510,6 +546,10 @@ CMaterialViewerFrame::OnCreate(LPCREATESTRUCT create_struct)
 
 	m_Preview = new CMaterialPreviewPane;
 	m_Preview->Create(this, CRect(0, 0, 10, 10), PREVIEW_ID);
+	m_Preview->Set_Light_Placement_Mode(
+		::AfxGetApp()->GetProfileInt("Config", "MatViewerLightPerFace", 1) != 0
+			? CMaterialPreviewPane::LIGHT_PER_FACE
+			: CMaterialPreviewPane::LIGHT_FREE_ROAM);
 
 #ifdef W3DVIEW_HAS_QT
 	m_PanelWnd = W3dMaterialViewer::CreatePanel(m_hWnd);

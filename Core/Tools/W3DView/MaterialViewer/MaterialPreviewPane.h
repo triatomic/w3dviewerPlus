@@ -72,6 +72,17 @@ public:
 	// Show Full Object). Null/empty clears the outline.
 	void Set_Highlight_Mesh(const char *name);
 
+	// How Ctrl+left-drag moves the scene light (Light menu). FREE_ROAM is the
+	// main viewport's trackball rotation about the orbit centre; PER_FACE
+	// places the light on the surface normal of the point under the cursor.
+	enum LightPlacementMode
+	{
+		LIGHT_FREE_ROAM = 0,
+		LIGHT_PER_FACE = 1,
+	};
+	void Set_Light_Placement_Mode(LightPlacementMode mode) { m_LightPlacementMode = mode; }
+	LightPlacementMode Get_Light_Placement_Mode() const { return m_LightPlacementMode; }
+
 	// Save/restore the full orbit-camera state so each Material Viewer tab can
 	// keep its own view. Captures the raw camera transform plus the orbit
 	// accumulators (centre / rotation / distance / zoom step) verbatim, so a
@@ -114,12 +125,14 @@ private:
 	// camera-local X and yaw about world Z through the orbit centre.
 	void Orbit_Camera(int deltaX, int deltaY);
 
-	// Movable scene light, mirroring the main viewport: holding Ctrl shows the
-	// LIGHT gizmo mesh at the scene light; Ctrl+left-drag trackball-rotates the
-	// light about the orbit centre; Ctrl+right-drag moves it closer/farther
-	// (never inside the object's bounding sphere).
+	// Movable scene light: holding Ctrl shows the LIGHT gizmo mesh at the
+	// scene light. Ctrl+left click/drag moves the light per the Light-menu
+	// mode (Rotate_Light = free roam, Position_Light_At_Cursor = per face).
+	// Ctrl+right-drag moves it closer/farther (never inside the bounding
+	// sphere).
 	void Sync_Light_Mesh(bool visible);
 	void Rotate_Light(CPoint point);
+	void Position_Light_At_Cursor(CPoint point);
 	void Adjust_Light_Distance(int deltaY);
 
 	// Draws the highlighted sub-object's bounding box as a wireframe overlay.
@@ -144,6 +157,7 @@ private:
 	RenderObjClass		*m_LightMesh;
 	bool				m_LightMeshInScene;
 	float				m_LightMeshScale;	// last applied gizmo scale
+	LightPlacementMode	m_LightPlacementMode;
 
 	// Name of the currently loaded model. LoadModel re-frames the camera only
 	// when this changes, so a post-save reload of the same model keeps the view.

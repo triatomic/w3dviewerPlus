@@ -22,6 +22,7 @@
 #include "aabox.h"		// highlighted sub-object outline box
 #include "assetmgr.h"
 #include "camera.h"
+#include "coltest.h"	// ray-cast for the Blender-style light placement
 #include "dx8renderer.h"
 #include "dx8wrapper.h"
 #include "light.h"
@@ -68,6 +69,7 @@ CMaterialPreviewPane::CMaterialPreviewPane()
 	  m_LightMesh(nullptr),
 	  m_LightMeshInScene(false),
 	  m_LightMeshScale(1.0F),
+	  m_LightPlacementMode(LIGHT_PER_FACE),
 	  m_SphereCenter(0, 0, 0),
 	  m_CameraDistance(10.0F),
 	  m_MinZoomAdjust(0.0F),
@@ -646,8 +648,8 @@ CMaterialPreviewPane::Sync_Light_Mesh(bool visible)
 	}
 }
 
-// Ctrl+left-drag: trackball-rotate the scene light about the orbit centre
-// (same math as CGraphicView's light rotation).
+// Ctrl+left-drag, Free Roam mode: trackball-rotate the scene light about the
+// orbit centre (same math as CGraphicView's light rotation).
 void
 CMaterialPreviewPane::Rotate_Light(CPoint point)
 {
@@ -684,6 +686,72 @@ CMaterialPreviewPane::Rotate_Light(CPoint point)
 
 	Matrix3D light_tm(light_orientation, m_SphereCenter);
 	light_tm.Translate(-to_center);
+
+	if (m_LightMesh != nullptr) {
+		m_LightMesh->Set_Transform(light_tm);
+	}
+	m_Light->Set_Transform(light_tm);
+}
+
+// Ctrl+left click/drag, Per Face mode: Blender-style light placement. Casts a pick ray
+// through the cursor at the displayed object; on a hit the light moves onto
+// the hit point's surface normal (keeping its current stand-off distance), so
+// the spot under the cursor becomes the most-lit point. A miss leaves the
+// light where it is.
+void
+CMaterialPreviewPane::Position_Light_At_Cursor(CPoint point)
+{
+	if (m_Light == nullptr || m_Camera == nullptr || m_RenderObj == nullptr) {
+		return;
+	}
+
+	RECT rect;
+	GetClientRect(&rect);
+	if (rect.right <= 0 || rect.bottom <= 0) {
+		return;
+	}
+
+	// Cursor -> world-space pick ray through the view plane.
+	Vector2 device;
+	device.X = 2.0F * (float)point.x / (float)rect.right - 1.0F;
+	device.Y = 1.0F - 2.0F * (float)point.y / (float)rect.bottom;
+
+	Vector3 on_plane;
+	m_Camera->Un_Project(on_plane, device);
+	Vector3 start = m_Camera->Get_Transform().Get_Translation();
+	Vector3 dir = on_plane - start;
+	dir.Normalize();
+	Vector3 end = start + dir * (m_CameraDistance * 60.0F);	// out to the far clip
+
+	CastResultStruct result;
+	result.ComputeContactPoint = true;
+	LineSegClass ray(start, end);
+	RayCollisionTestClass raytest(ray, &result, COLL_TYPE_ALL, true /*translucent*/, false);
+	m_RenderObj->Cast_Ray(raytest);
+
+	if (result.StartBad || result.Fraction >= 1.0F) {
+		return;
+	}
+
+	Vector3 contact = start + (end - start) * result.Fraction;
+	Vector3 normal = result.Normal;
+	if (normal.Length2() < 0.0001F) {
+		return;
+	}
+	normal.Normalize();
+
+	// Keep the light's current stand-off from the surface (Ctrl+right-drag
+	// adjusts it), with a floor so it never sits inside small details.
+	float offset = (m_Light->Get_Position() - contact).Length();
+	float min_offset = m_ViewedSphere.Radius * 0.25F;
+	if (offset < min_offset) {
+		offset = min_offset;
+	}
+
+	// Camera-style Look_At: -Z faces the contact point, so the existing
+	// distance adjust (translate along local Z) still moves to/from the surface.
+	Matrix3D light_tm(1);
+	light_tm.Look_At(contact + normal * offset, contact, 0);
 
 	if (m_LightMesh != nullptr) {
 		m_LightMesh->Set_Transform(light_tm);
@@ -962,6 +1030,17 @@ CMaterialPreviewPane::OnLButtonDown(UINT flags, CPoint point)
 	Clip_Cursor_To_View();
 	m_bMouseDown = TRUE;
 	m_LastPoint = point;
+
+	// In Per Face mode a Ctrl+click places the light on the clicked surface
+	// point immediately (a drag then keeps following the cursor via
+	// OnMouseMove). Free Roam is relative, so the click alone does nothing.
+	if (flags & MK_CONTROL) {
+		Sync_Light_Mesh(true);
+		if (m_LightPlacementMode == LIGHT_PER_FACE) {
+			Position_Light_At_Cursor(point);
+		}
+	}
+
 	CWnd::OnLButtonDown(flags, point);
 }
 
@@ -1071,7 +1150,11 @@ CMaterialPreviewPane::OnMouseMove(UINT flags, CPoint point)
 		m_LastPoint = point;
 	}
 	else if ((flags & MK_CONTROL) && m_bMouseDown) {
-		Rotate_Light(point);
+		if (m_LightPlacementMode == LIGHT_PER_FACE) {
+			Position_Light_At_Cursor(point);
+		} else {
+			Rotate_Light(point);
+		}
 		m_LastPoint = point;
 	}
 	else if ((flags & MK_CONTROL) && m_bRMouseDown) {

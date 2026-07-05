@@ -127,6 +127,10 @@ protected:
 	afx_msg void OnShaderBackfaceTint();
 	afx_msg void OnUpdateShaderBackfaceTint(CCmdUI *cmd_ui);
 	afx_msg void OnShaderBackfaceTintColor();
+	afx_msg void OnLightFreeRoam();
+	afx_msg void OnUpdateLightFreeRoam(CCmdUI *cmd_ui);
+	afx_msg void OnLightPerFace();
+	afx_msg void OnUpdateLightPerFace(CCmdUI *cmd_ui);
 	afx_msg void OnDropFiles(HDROP drop);
 	afx_msg LRESULT OnThemeChanged(WPARAM wparam, LPARAM lparam);
 	DECLARE_MESSAGE_MAP()
