@@ -33,8 +33,10 @@
 
 #include <QtCore/QEvent>
 #include <QtCore/QFileInfo>
+#include <QtCore/QMap>
 #include <QtCore/QPointF>
 #include <QtCore/QSize>
+#include <QtCore/QTimer>
 #include <QtGui/QClipboard>
 #include <QtGui/QColor>
 #include <QtGui/QIcon>
@@ -879,6 +881,192 @@ QToolButton *Make_Copy_Button(const QString &text, const char *tooltip)
 	return copy;
 }
 
+//////////////////////////////////////////////////////////////////////////////
+//	Section copy/paste
+//////////////////////////////////////////////////////////////////////////////
+//
+// Each settings group (vertex material, stage mapping, blend, advanced) can be
+// copied to the clipboard as a tagged "[W3DView.X]" key=value text block and
+// pasted onto the same group of any mesh / pass / file. Plain text, so it also
+// travels between two W3DView instances (and can be kept in a notes file).
+
+// Mapper args are multi-line; keep the block one-line-per-key by escaping.
+QString Escape_Section_Value(const std::string &value)
+{
+	QString out = QString::fromLatin1(value.c_str());
+	out.replace(QStringLiteral("\\"), QStringLiteral("\\\\"));
+	out.replace(QStringLiteral("\r"), QStringLiteral("\\r"));
+	out.replace(QStringLiteral("\n"), QStringLiteral("\\n"));
+	return out;
+}
+
+std::string Unescape_Section_Value(const QString &value)
+{
+	QString out;
+	out.reserve(value.size());
+	for (int i = 0; i < value.size(); i++) {
+		QChar ch = value.at(i);
+		if (ch == QChar('\\') && i + 1 < value.size()) {
+			QChar next = value.at(++i);
+			if (next == QChar('n'))       out += QChar('\n');
+			else if (next == QChar('r'))  out += QChar('\r');
+			else                          out += next;
+		} else {
+			out += ch;
+		}
+	}
+	return out.toLatin1().constData();
+}
+
+QString Serialize_Section(const char *tag, const QList<QPair<QString, QString>> &fields)
+{
+	QString out = QStringLiteral("[") + QString::fromLatin1(tag) + QStringLiteral("]\n");
+	for (const QPair<QString, QString> &field : fields) {
+		out += field.first + QStringLiteral("=") + field.second + QStringLiteral("\n");
+	}
+	return out;
+}
+
+// Reads the clipboard; true only when it holds a "[tag]" block. Fills `out`
+// with its key=value lines.
+bool Parse_Section(const char *tag, QMap<QString, QString> &out)
+{
+	QStringList lines = QApplication::clipboard()->text().split(QChar('\n'));
+	bool tag_seen = false;
+	QString wanted = QStringLiteral("[") + QString::fromLatin1(tag) + QStringLiteral("]");
+	for (QString line : lines) {
+		line.remove(QChar('\r'));
+		if (!tag_seen) {
+			if (line.trimmed().isEmpty()) {
+				continue;
+			}
+			if (line.trimmed() != wanted) {
+				return false;
+			}
+			tag_seen = true;
+			continue;
+		}
+		int eq = line.indexOf(QChar('='));
+		if (eq > 0) {
+			out.insert(line.left(eq).trimmed(), line.mid(eq + 1));
+		}
+	}
+	return tag_seen;
+}
+
+// Field readers: apply only when the key is present and parses; out-of-range
+// numbers are clamped so a hand-edited block cannot corrupt the document.
+bool Parse_Int_Field(const QMap<QString, QString> &kv, const char *key,
+	int min_value, int max_value, int &out)
+{
+	QMap<QString, QString>::const_iterator it = kv.find(QString::fromLatin1(key));
+	if (it == kv.end()) {
+		return false;
+	}
+	bool ok = false;
+	int value = it.value().trimmed().toInt(&ok);
+	if (!ok) {
+		return false;
+	}
+	out = (value < min_value) ? min_value : ((value > max_value) ? max_value : value);
+	return true;
+}
+
+bool Parse_Float_Field(const QMap<QString, QString> &kv, const char *key,
+	float min_value, float max_value, float &out)
+{
+	QMap<QString, QString>::const_iterator it = kv.find(QString::fromLatin1(key));
+	if (it == kv.end()) {
+		return false;
+	}
+	bool ok = false;
+	float value = it.value().trimmed().toFloat(&ok);
+	if (!ok) {
+		return false;
+	}
+	out = (value < min_value) ? min_value : ((value > max_value) ? max_value : value);
+	return true;
+}
+
+QString Color_To_String(const uint8_t rgb[3])
+{
+	return QStringLiteral("%1,%2,%3").arg(rgb[0]).arg(rgb[1]).arg(rgb[2]);
+}
+
+bool Parse_Color_Field(const QMap<QString, QString> &kv, const char *key, uint8_t rgb[3])
+{
+	QMap<QString, QString>::const_iterator it = kv.find(QString::fromLatin1(key));
+	if (it == kv.end()) {
+		return false;
+	}
+	QStringList parts = it.value().split(QChar(','));
+	if (parts.size() != 3) {
+		return false;
+	}
+	uint8_t out[3];
+	for (int i = 0; i < 3; i++) {
+		bool ok = false;
+		int value = parts[i].trimmed().toInt(&ok);
+		if (!ok) {
+			return false;
+		}
+		out[i] = (uint8_t)((value < 0) ? 0 : ((value > 255) ? 255 : value));
+	}
+	memcpy(rgb, out, 3);
+	return true;
+}
+
+// Right-aligned [Copy][Paste] pair for one settings group. `make_text`
+// serializes the group's CURRENT values at click time; `paste` applies the
+// clipboard onto the group and returns false when it does not hold this
+// group's block (pass null outside edit mode — the button disables).
+// Feedback lands in the status strip.
+QWidget *Make_Copy_Paste_Row(const QString &what,
+	std::function<QString()> make_text, std::function<bool()> paste)
+{
+	QWidget *row = new QWidget;
+	QHBoxLayout *layout = new QHBoxLayout(row);
+	layout->setContentsMargins(0, 0, 0, 0);
+	layout->setSpacing(4);
+	layout->addStretch(1);
+
+	QToolButton *copy_button = new QToolButton;
+	copy_button->setText(QStringLiteral("Copy"));
+	copy_button->setAutoRaise(true);
+	copy_button->setFocusPolicy(Qt::NoFocus);
+	copy_button->setFixedHeight(18);
+	Set_Help(copy_button, QStringLiteral("Copy the %1 settings to the clipboard.").arg(what));
+	QObject::connect(copy_button, &QToolButton::clicked, [what, make_text]() {
+		QApplication::clipboard()->setText(make_text());
+		Show_Help(QStringLiteral("Copied the %1 settings to the clipboard.").arg(what));
+	});
+	layout->addWidget(copy_button);
+
+	QToolButton *paste_button = new QToolButton;
+	paste_button->setText(QStringLiteral("Paste"));
+	paste_button->setAutoRaise(true);
+	paste_button->setFocusPolicy(Qt::NoFocus);
+	paste_button->setFixedHeight(18);
+	if (paste) {
+		Set_Help(paste_button,
+			QStringLiteral("Paste %1 settings from the clipboard onto this group.").arg(what));
+		QObject::connect(paste_button, &QToolButton::clicked, [what, paste]() {
+			if (paste()) {
+				Show_Help(QStringLiteral("Pasted the %1 settings.").arg(what));
+			} else {
+				Show_Help(QStringLiteral("The clipboard does not contain %1 settings.").arg(what));
+			}
+		});
+	} else {
+		paste_button->setEnabled(false);
+		paste_button->setToolTip(QStringLiteral("Switch to Edit mode to paste."));
+		Set_Help(paste_button, QStringLiteral("Switch to Edit mode to paste %1 settings.").arg(what));
+	}
+	layout->addWidget(paste_button);
+
+	return row;
+}
+
 // Applies the segmented-control stylesheet to a pair of buttons named
 // "segLeft"/"segRight": flatten the seam corners into one divider, highlight
 // the checked half, hover-tint the inactive half. Palette-driven for light/dark.
@@ -978,6 +1166,7 @@ struct EditCtx
 	MeshMaterialData	*mesh = nullptr;	// mutable when edit; else null
 	ChangeFn			markDirty;			// commit one undoable edit (discrete controls)
 	ChangeFn			markTyping;			// commit a coalescing edit (text boxes)
+	ChangeFn			refreshPage;		// rebuild the page (deferred) after a multi-field paste
 };
 
 QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &material, int stage)
@@ -994,6 +1183,44 @@ QWidget *Build_Stage_Mapping_Group(const EditCtx &ctx, VertexMaterialData &mater
 	VertexMaterialData *material_ptr = &material;
 	ChangeFn dirty = ctx.markDirty;
 	ChangeFn typing = ctx.markTyping;
+
+	// Copy/Paste for this stage's mapping (Type + Args). The block format is
+	// shared between stages, so stage 0 can be pasted onto stage 1 and back.
+	{
+		std::string *args_for_copy = args;
+		std::function<QString()> make_text = [material_ptr, mask, shift, args_for_copy]() {
+			QList<QPair<QString, QString>> fields;
+			fields << qMakePair(QStringLiteral("type"),
+				QString::number((int)((material_ptr->attributes & mask) >> shift)));
+			fields << qMakePair(QStringLiteral("args"), Escape_Section_Value(*args_for_copy));
+			return Serialize_Section("W3DView.StageMapping", fields);
+		};
+
+		std::function<bool()> paste;
+		if (ctx.edit) {
+			ChangeFn refresh = ctx.refreshPage;
+			paste = [material_ptr, mask, shift, args_for_copy, dirty, refresh]() -> bool {
+				QMap<QString, QString> kv;
+				if (!Parse_Section("W3DView.StageMapping", kv)) {
+					return false;
+				}
+				int type = 0;
+				if (Parse_Int_Field(kv, "type", 0,
+						(int)(sizeof(MAPPING_TYPES) / sizeof(MAPPING_TYPES[0])) - 1, type)) {
+					material_ptr->attributes =
+						(material_ptr->attributes & ~mask) | (((uint32_t)type << shift) & mask);
+				}
+				QMap<QString, QString>::const_iterator it = kv.find(QStringLiteral("args"));
+				if (it != kv.end()) {
+					*args_for_copy = Unescape_Section_Value(it.value());
+				}
+				if (dirty) dirty();
+				if (refresh) refresh();
+				return true;
+			};
+		}
+		form->addRow(QString(), Make_Copy_Paste_Row(QStringLiteral("stage mapping"), make_text, paste));
+	}
 
 	// Current mapping type, shared so the Type combo, the Table ghost rows, and
 	// the Raw ghost hint all track the latest selection.
@@ -1411,6 +1638,53 @@ QWidget *Build_Vertex_Material_Tab(const EditCtx &ctx, MeshMaterialData &mesh, c
 	}
 
 	VertexMaterialData *material_ptr = &material;
+
+	// Copy/Paste for the vertex-material settings: colors, Specular To
+	// Diffuse, opacity, translucency, shininess. The stage mappings are a
+	// separate block with their own buttons below.
+	{
+		std::function<QString()> make_text = [material_ptr]() {
+			QList<QPair<QString, QString>> fields;
+			fields << qMakePair(QStringLiteral("ambient"), Color_To_String(material_ptr->ambient));
+			fields << qMakePair(QStringLiteral("diffuse"), Color_To_String(material_ptr->diffuse));
+			fields << qMakePair(QStringLiteral("specular"), Color_To_String(material_ptr->specular));
+			fields << qMakePair(QStringLiteral("emissive"), Color_To_String(material_ptr->emissive));
+			fields << qMakePair(QStringLiteral("specToDiffuse"), QString::number(
+				(material_ptr->attributes & VERTMAT_COPY_SPECULAR_TO_DIFFUSE) != 0 ? 1 : 0));
+			fields << qMakePair(QStringLiteral("opacity"), QString::number(material_ptr->opacity, 'f', 6));
+			fields << qMakePair(QStringLiteral("translucency"), QString::number(material_ptr->translucency, 'f', 6));
+			fields << qMakePair(QStringLiteral("shininess"), QString::number(material_ptr->shininess, 'f', 6));
+			return Serialize_Section("W3DView.VertexMaterial", fields);
+		};
+
+		std::function<bool()> paste;
+		if (mat_ctx.edit) {
+			ChangeFn refresh = mat_ctx.refreshPage;
+			paste = [material_ptr, dirty, refresh]() -> bool {
+				QMap<QString, QString> kv;
+				if (!Parse_Section("W3DView.VertexMaterial", kv)) {
+					return false;
+				}
+				Parse_Color_Field(kv, "ambient", material_ptr->ambient);
+				Parse_Color_Field(kv, "diffuse", material_ptr->diffuse);
+				Parse_Color_Field(kv, "specular", material_ptr->specular);
+				Parse_Color_Field(kv, "emissive", material_ptr->emissive);
+				int flag = 0;
+				if (Parse_Int_Field(kv, "specToDiffuse", 0, 1, flag)) {
+					if (flag) material_ptr->attributes |= VERTMAT_COPY_SPECULAR_TO_DIFFUSE;
+					else      material_ptr->attributes &= ~VERTMAT_COPY_SPECULAR_TO_DIFFUSE;
+				}
+				Parse_Float_Field(kv, "opacity", 0.0F, 1.0F, material_ptr->opacity);
+				Parse_Float_Field(kv, "translucency", 0.0F, 1.0F, material_ptr->translucency);
+				Parse_Float_Field(kv, "shininess", 0.0F, 1.0F, material_ptr->shininess);
+				if (dirty) dirty();
+				if (refresh) refresh();
+				return true;
+			};
+		}
+		layout->addWidget(Make_Copy_Paste_Row(QStringLiteral("vertex material"), make_text, paste));
+	}
+
 	QFormLayout *form = new QFormLayout;
 	QWidget *ambient_row = Make_Color_Row(material.ambient,
 		mat_ctx.edit ? [material_ptr, dirty](const uint8_t c[3]) {
@@ -1491,6 +1765,49 @@ QWidget *Build_Shader_Tab(const EditCtx &ctx, MeshMaterialData &mesh, const Pass
 	QGroupBox *blend_group = new QGroupBox(QStringLiteral("Blend"));
 	QFormLayout *blend_form = new QFormLayout(blend_group);
 
+	// Copy/Paste for the blend settings (Src/Dest factors, Alpha Test, Write Z
+	// Buffer — the Blend Mode preset is derived from these).
+	{
+		std::function<QString()> make_text = [shader_ptr]() {
+			QList<QPair<QString, QString>> fields;
+			fields << qMakePair(QStringLiteral("srcBlend"), QString::number(shader_ptr->srcBlend));
+			fields << qMakePair(QStringLiteral("destBlend"), QString::number(shader_ptr->destBlend));
+			fields << qMakePair(QStringLiteral("alphaTest"), QString::number(shader_ptr->alphaTest));
+			fields << qMakePair(QStringLiteral("depthMask"), QString::number(shader_ptr->depthMask));
+			return Serialize_Section("W3DView.Blend", fields);
+		};
+
+		std::function<bool()> paste;
+		if (edit) {
+			ChangeFn refresh = ctx.refreshPage;
+			paste = [shader_ptr, dirty, refresh]() -> bool {
+				QMap<QString, QString> kv;
+				if (!Parse_Section("W3DView.Blend", kv)) {
+					return false;
+				}
+				int value = 0;
+				if (Parse_Int_Field(kv, "srcBlend", 0,
+						(int)(sizeof(SRC_BLEND) / sizeof(SRC_BLEND[0])) - 1, value)) {
+					shader_ptr->srcBlend = (uint8_t)value;
+				}
+				if (Parse_Int_Field(kv, "destBlend", 0,
+						(int)(sizeof(DEST_BLEND) / sizeof(DEST_BLEND[0])) - 1, value)) {
+					shader_ptr->destBlend = (uint8_t)value;
+				}
+				if (Parse_Int_Field(kv, "alphaTest", 0, 1, value)) {
+					shader_ptr->alphaTest = (uint8_t)value;
+				}
+				if (Parse_Int_Field(kv, "depthMask", 0, 1, value)) {
+					shader_ptr->depthMask = (uint8_t)value;
+				}
+				if (dirty) dirty();
+				if (refresh) refresh();
+				return true;
+			};
+		}
+		blend_form->addRow(QString(), Make_Copy_Paste_Row(QStringLiteral("blend"), make_text, paste));
+	}
+
 	// The preset combo and the three raw controls update each other. The
 	// controls are created before they can all be cross-referenced, so the
 	// pointers live in a heap holder captured by value in every lambda (a
@@ -1566,6 +1883,57 @@ QWidget *Build_Shader_Tab(const EditCtx &ctx, MeshMaterialData &mesh, const Pass
 
 	QGroupBox *advanced_group = new QGroupBox(QStringLiteral("Advanced"));
 	QFormLayout *advanced_form = new QFormLayout(advanced_group);
+
+	// Copy/Paste for the Advanced settings (gradients, depth compare, detail
+	// colour/alpha functions).
+	{
+		std::function<QString()> make_text = [shader_ptr]() {
+			QList<QPair<QString, QString>> fields;
+			fields << qMakePair(QStringLiteral("priGradient"), QString::number(shader_ptr->priGradient));
+			fields << qMakePair(QStringLiteral("secGradient"), QString::number(shader_ptr->secGradient));
+			fields << qMakePair(QStringLiteral("depthCompare"), QString::number(shader_ptr->depthCompare));
+			fields << qMakePair(QStringLiteral("detailColorFunc"), QString::number(shader_ptr->detailColorFunc));
+			fields << qMakePair(QStringLiteral("detailAlphaFunc"), QString::number(shader_ptr->detailAlphaFunc));
+			return Serialize_Section("W3DView.Advanced", fields);
+		};
+
+		std::function<bool()> paste;
+		if (edit) {
+			ChangeFn refresh = ctx.refreshPage;
+			paste = [shader_ptr, dirty, refresh]() -> bool {
+				QMap<QString, QString> kv;
+				if (!Parse_Section("W3DView.Advanced", kv)) {
+					return false;
+				}
+				int value = 0;
+				if (Parse_Int_Field(kv, "priGradient", 0,
+						(int)(sizeof(PRI_GRADIENT) / sizeof(PRI_GRADIENT[0])) - 1, value)) {
+					shader_ptr->priGradient = (uint8_t)value;
+				}
+				if (Parse_Int_Field(kv, "secGradient", 0,
+						(int)(sizeof(SEC_GRADIENT) / sizeof(SEC_GRADIENT[0])) - 1, value)) {
+					shader_ptr->secGradient = (uint8_t)value;
+				}
+				if (Parse_Int_Field(kv, "depthCompare", 0,
+						(int)(sizeof(DEPTH_COMPARE) / sizeof(DEPTH_COMPARE[0])) - 1, value)) {
+					shader_ptr->depthCompare = (uint8_t)value;
+				}
+				if (Parse_Int_Field(kv, "detailColorFunc", 0,
+						(int)(sizeof(DETAIL_COLOR) / sizeof(DETAIL_COLOR[0])) - 1, value)) {
+					shader_ptr->detailColorFunc = (uint8_t)value;
+				}
+				if (Parse_Int_Field(kv, "detailAlphaFunc", 0,
+						(int)(sizeof(DETAIL_ALPHA) / sizeof(DETAIL_ALPHA[0])) - 1, value)) {
+					shader_ptr->detailAlphaFunc = (uint8_t)value;
+				}
+				if (dirty) dirty();
+				if (refresh) refresh();
+				return true;
+			};
+		}
+		advanced_form->addRow(QString(), Make_Copy_Paste_Row(QStringLiteral("advanced"), make_text, paste));
+	}
+
 	advanced_form->addRow(QStringLiteral("Pri Gradient:"),
 		Make_Described_Combo(PRI_GRADIENT, PRI_GRADIENT_DESCS, Help::PRI_GRAD,
 			shader.priGradient, &shader_ptr->priGradient, edit, dirty));
@@ -2252,6 +2620,11 @@ private:
 		ctx.mesh = &mesh;
 		ctx.markDirty = [this]() { Commit_Edit(false); };	// discrete: one step each
 		ctx.markTyping = [this]() { Commit_Edit(true); };	// text: coalesced burst
+		// Deferred rebuild: the paste button that asks for it lives on the page
+		// being torn down, so never rebuild inside its clicked() handler.
+		ctx.refreshPage = [this]() {
+			QTimer::singleShot(0, this, [this]() { Show_Mesh(m_CurrentIndex); });
+		};
 
 		MeshMaterialData *mesh_ptr = &mesh;
 		ChangeFn dirty = ctx.markDirty;
