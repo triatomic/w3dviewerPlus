@@ -1485,30 +1485,35 @@ CGraphicView::Orbit_Camera (int deltaX, int deltaY, CW3DViewDoc *doc)
 
 	Matrix3D transform = m_pCamera->Get_Transform ();
 
-	// Move camera-space origin to the orbit center.
-	Matrix3D inverseMatrix;
-	transform.Get_Orthogonal_Inverse (inverseMatrix);
-	Vector3 to_object;
-	inverseMatrix.mulVector3 (sphereCenter, to_object);
-	transform.Translate (to_object);
-
-	// Pitch: Rotate_X is a local (camera-space) post-multiply — correct for tilt up/down.
+	// Pitch: Rotate_X is a local (camera-space) post-multiply, correct for tilt up/down.
+	// It pivots about the camera-space image of the orbit center, so bracket it with a
+	// local translate to/from that point.
 	if (m_allowedCameraRotation == FreeRotation || m_allowedCameraRotation == OnlyRotateX)
 	{
+		Matrix3D inverseMatrix;
+		transform.Get_Orthogonal_Inverse (inverseMatrix);
+		Vector3 to_object;
+		inverseMatrix.mulVector3 (sphereCenter, to_object);
+
+		transform.Translate (to_object);
 		transform.Rotate_X (pitchRad);
+		transform.Translate (-to_object);
 	}
 
-	// Yaw: Pre_Rotate_Z is a world-space pre-multiply — rotates around world Z without rolling.
+	// Yaw: rotate about world Z through the orbit center (sphereCenter), so the camera
+	// swings around the object without rolling. This must be a WORLD-space pivot:
+	// M' = T(c) * Rz * T(-c) * M. Doing Pre_Rotate_Z alone pivots about the world
+	// ORIGIN, which slides the object across the viewport when it isn't at (0,0,0).
 	if (m_allowedCameraRotation == FreeRotation || m_allowedCameraRotation == OnlyRotateY)
 	{
+		transform.Set_Translation (transform.Get_Translation () - sphereCenter);
 		transform.Pre_Rotate_Z (yawRad);
+		transform.Set_Translation (transform.Get_Translation () + sphereCenter);
 	}
 	else if (m_allowedCameraRotation == OnlyRotateZ)
 	{
 		transform.Rotate_Z (yawRad);
 	}
-
-	transform.Translate (-to_object);
 
 	// Keep the quaternion accumulator in sync so pan still works correctly.
 	rotation = Build_Quaternion (transform);
