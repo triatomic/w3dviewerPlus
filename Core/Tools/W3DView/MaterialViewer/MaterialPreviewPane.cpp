@@ -19,6 +19,7 @@
 #include "../StdAfx.h"
 #include "MaterialPreviewPane.h"
 
+#include "aabox.h"		// highlighted sub-object outline box
 #include "assetmgr.h"
 #include "camera.h"
 #include "dx8renderer.h"
@@ -512,6 +513,104 @@ CMaterialPreviewPane::Reset_Camera_To_Sphere(const SphereClass &sphere)
 	}
 }
 
+void
+CMaterialPreviewPane::Set_Highlight_Mesh(const char *name)
+{
+	m_HighlightMeshName = (name != nullptr) ? name : "";
+}
+
+// Draws the highlighted sub-object's bounding box as a magenta wireframe
+// (matching the main viewport's sub-object selection colour), always on top.
+// Same overlay recipe as the main view's bone/selection overlays: runs inside
+// the render bracket after the scene, so view/projection are already set.
+void
+CMaterialPreviewPane::Render_Highlight_Outline()
+{
+	if (m_HighlightMeshName.empty() || m_RenderObj == nullptr) {
+		return;
+	}
+
+	// Find the sub-object: full "Container.Mesh" name first, then short name.
+	RenderObjClass *sub = nullptr;
+	int count = m_RenderObj->Get_Num_Sub_Objects();
+	for (int i = 0; i < count && sub == nullptr; i++) {
+		RenderObjClass *candidate = m_RenderObj->Get_Sub_Object(i);
+		if (candidate == nullptr) {
+			continue;
+		}
+		const char *full = candidate->Get_Name();
+		const char *dot = ::strchr(full, '.');
+		const char *short_name = (dot != nullptr) ? dot + 1 : full;
+		if (::_stricmp(full, m_HighlightMeshName.c_str()) == 0
+				|| ::_stricmp(short_name, m_HighlightMeshName.c_str()) == 0) {
+			sub = candidate;
+		} else {
+			candidate->Release_Ref();
+		}
+	}
+	if (sub == nullptr) {
+		return;
+	}
+
+	AABoxClass box;
+	sub->Get_Obj_Space_Bounding_Box(box);
+	Matrix3D tm = sub->Get_Transform();
+	sub->Release_Ref();
+
+	Vector3 corners[8];
+	for (int i = 0; i < 8; i++) {
+		Vector3 local(
+			box.Center.X + ((i & 1) ? box.Extent.X : -box.Extent.X),
+			box.Center.Y + ((i & 2) ? box.Extent.Y : -box.Extent.Y),
+			box.Center.Z + ((i & 4) ? box.Extent.Z : -box.Extent.Z));
+		Matrix3D::Transform_Vector(tm, local, &corners[i]);
+	}
+
+	ShaderClass shader = ShaderClass::_PresetOpaqueSolidShader;
+	shader.Set_Depth_Compare(ShaderClass::PASS_ALWAYS);
+	shader.Set_Depth_Mask(ShaderClass::DEPTH_WRITE_DISABLE);
+	DX8Wrapper::Set_Shader(shader);
+	DX8Wrapper::Set_Texture(0, nullptr);
+
+	VertexMaterialClass *vm = VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_DIFFUSE);
+	DX8Wrapper::Set_Material(vm);
+	if (vm != nullptr) {
+		vm->Release_Ref();
+	}
+
+	Matrix3D identity(true);
+	DX8Wrapper::Set_Transform(D3DTS_WORLD, identity);
+	DX8Wrapper::Apply_Render_State_Changes();
+
+	IDirect3DDevice8 *dev = DX8Wrapper::_Get_D3D_Device8();
+	if (dev == nullptr) {
+		return;
+	}
+
+	struct OutlineVertex { float x, y, z; DWORD color; };
+	const DWORD color = 0xFFFF00FF;	// magenta = selected sub-object (main view)
+	static const int EDGES[12][2] = {
+		{ 0, 1 }, { 2, 3 }, { 4, 5 }, { 6, 7 },	// X-aligned edges
+		{ 0, 2 }, { 1, 3 }, { 4, 6 }, { 5, 7 },	// Y-aligned edges
+		{ 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 },	// Z-aligned edges
+	};
+	OutlineVertex verts[24];
+	for (int e = 0; e < 12; e++) {
+		for (int p = 0; p < 2; p++) {
+			const Vector3 &c = corners[EDGES[e][p]];
+			OutlineVertex &v = verts[e * 2 + p];
+			v.x = c.X;
+			v.y = c.Y;
+			v.z = c.Z;
+			v.color = color;
+		}
+	}
+
+	dev->SetVertexShader(D3DFVF_XYZ | D3DFVF_DIFFUSE);
+	dev->DrawPrimitiveUP(D3DPT_LINELIST, 12, verts, sizeof(OutlineVertex));
+	DX8Wrapper::Invalidate_Cached_Render_States();
+}
+
 // Adds/removes the light gizmo mesh so it is visible exactly while Ctrl is
 // held (called from OnMouseMove, like the main viewport). The mesh comes from
 // the LIGHT prototype (embedded Light.w3d resource), created lazily.
@@ -826,6 +925,9 @@ CMaterialPreviewPane::Render()
 	// TheSuperHackers @feature Tria Second pass: tint the normally-culled back faces,
 	// matching the main viewport (shared toggle + colour + pass logic).
 	CGraphicView::Render_Backface_Tint_Pass(m_Scene, m_Camera);
+
+	// Outline the selected mesh while the whole object is displayed.
+	Render_Highlight_Outline();
 
 	WW3D::End_Render(false);
 

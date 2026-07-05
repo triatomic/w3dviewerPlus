@@ -1129,6 +1129,11 @@ CMaterialViewerFrame::UpdatePreviewModel()
 	if (tab.dirty) {
 		m_Preview->ApplyLiveMaterials(tab.livePreviewDoc);
 	}
+
+	// In the full-object view, outline the selected mesh so the user can see
+	// which part of the object the panel is editing.
+	m_Preview->Set_Highlight_Mesh((tab.showFullObject && !tab.currentMeshName.empty())
+		? tab.currentMeshName.c_str() : nullptr);
 }
 
 void
@@ -1153,6 +1158,10 @@ CMaterialViewerFrame::OnPanelMeshSelected(const char *meshName)
 	Active().currentMeshName = meshName;
 	if (!Active().showFullObject) {
 		UpdatePreviewModel();
+	} else if (m_Preview != nullptr) {
+		// Full-object view: the displayed object is unchanged, only the
+		// selection outline moves to the newly selected mesh.
+		m_Preview->Set_Highlight_Mesh(meshName);
 	}
 }
 

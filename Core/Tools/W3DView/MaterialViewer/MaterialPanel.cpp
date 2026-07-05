@@ -2191,14 +2191,32 @@ private:
 		QObject::connect(buttons, &QDialogButtonBox::accepted, [&dialog]() { dialog.accept(); });
 		QObject::connect(buttons, &QDialogButtonBox::rejected, [&dialog]() { dialog.reject(); });
 
-		filter->setFocus();
+		// Live preview: while the user scrolls the list (arrow keys, clicks,
+		// filtering), show the highlighted mesh in the viewport immediately.
+		// The panel page is NOT rebuilt — that happens only on accept
+		// (Show_Mesh); a cancel restores the previous mesh below.
+		QObject::connect(list, &QListWidget::currentItemChanged,
+			[](QListWidgetItem *current, QListWidgetItem *) {
+				if (current != nullptr && g_MeshSelectedCallback != nullptr) {
+					QByteArray name = current->text().toLatin1();
+					g_MeshSelectedCallback(name.constData());
+				}
+			});
+
+		// Focus the list (not the filter) so arrow keys walk the meshes — and
+		// the live viewport preview — the moment the dialog opens.
+		list->setFocus();
 		Apply_Dark_Title_Bar((HWND)dialog.winId());
 
-		if (dialog.exec() == QDialog::Accepted) {
-			QListWidgetItem *item = list->currentItem();
-			if (item != nullptr && !item->isHidden()) {
-				Show_Mesh(item->data(Qt::UserRole).toInt());
-			}
+		bool accepted = (dialog.exec() == QDialog::Accepted);
+		QListWidgetItem *item = accepted ? list->currentItem() : nullptr;
+		if (item != nullptr && !item->isHidden()) {
+			Show_Mesh(item->data(Qt::UserRole).toInt());
+		} else if (g_MeshSelectedCallback != nullptr
+				&& m_CurrentIndex >= 0 && m_CurrentIndex < (int)m_Document.meshes.size()) {
+			// Cancelled (or accepted with no usable row): the panel still shows
+			// the old mesh, so point the live preview back at it.
+			g_MeshSelectedCallback(m_Document.meshes[m_CurrentIndex].meshName.c_str());
 		}
 	}
 

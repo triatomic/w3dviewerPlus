@@ -67,6 +67,11 @@ public:
 	// thread, outside the main view's Begin_Render/End_Render bracket.
 	void Render();
 
+	// Outlines the named sub-object's bounding box in the preview, so the mesh
+	// being edited stays visible while the whole object is displayed (View >
+	// Show Full Object). Null/empty clears the outline.
+	void Set_Highlight_Mesh(const char *name);
+
 	// Save/restore the full orbit-camera state so each Material Viewer tab can
 	// keep its own view. Captures the raw camera transform plus the orbit
 	// accumulators (centre / rotation / distance / zoom step) verbatim, so a
@@ -117,6 +122,10 @@ private:
 	void Rotate_Light(CPoint point);
 	void Adjust_Light_Distance(int deltaY);
 
+	// Draws the highlighted sub-object's bounding box as a wireframe overlay.
+	// Must run inside the Begin_Render/End_Render bracket, after the scene.
+	void Render_Highlight_Outline();
+
 	// Confines/wraps the cursor to the pane while dragging (infinite drag).
 	void Clip_Cursor_To_View();
 	bool Wrap_Cursor_In_View(CPoint &point);
@@ -139,6 +148,9 @@ private:
 	// Name of the currently loaded model. LoadModel re-frames the camera only
 	// when this changes, so a post-save reload of the same model keeps the view.
 	std::string			m_LoadedName;
+
+	// Sub-object to outline in the full-object view; empty = no outline.
+	std::string			m_HighlightMeshName;
 
 	// Orbit camera state — mirrors the main viewport (CGraphicView). The orbit
 	// centre and accumulated rotation are per-instance (the main view keeps its
