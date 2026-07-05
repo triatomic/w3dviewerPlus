@@ -651,6 +651,10 @@
 #define IDM_SHADER_ALPHA_BLEND_TEST     32937
 // TheSuperHackers @feature Tria 22/04/2026 Double-sided rendering toggle in W3D Shaders menu.
 #define IDM_SHADER_DOUBLE_SIDED         32939
+// TheSuperHackers @feature Tria Tint the normally-culled back faces in the W3D Shaders menu.
+#define IDM_SHADER_BACKFACE_TINT        32961
+// TheSuperHackers @feature Tria Pick the back-face tint colour.
+#define IDM_SHADER_BACKFACE_TINT_COLOR  32962
 // TheSuperHackers @feature Tria 22/04/2026 Show sub-object and bone name labels in viewport.
 #define IDM_SHOW_SUBOBJ_NAMES           32940
 #define IDM_SHOW_BONE_NAMES             32941
@@ -734,7 +738,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_3D_CONTROLS                     1
 #define _APS_NEXT_RESOURCE_VALUE        731
-#define _APS_NEXT_COMMAND_VALUE         32961
+#define _APS_NEXT_COMMAND_VALUE         32963
 #define _APS_NEXT_CONTROL_VALUE         1189
 #define _APS_NEXT_SYMED_VALUE           101
 #endif

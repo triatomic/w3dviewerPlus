@@ -187,6 +187,25 @@ protected:
 		  void					Set_Invert_Camera_Y (bool onoff);
 		  bool					Is_Invert_Camera_Y (void) const				{ return m_InvertCameraY; }
 
+		  // TheSuperHackers @feature Tria When set, a second render pass draws the
+		  // normally-culled back faces flat-tinted with s_BackfaceTintColor. Session-
+		  // only; static so the menu handlers (in CMainFrame and the Material Viewer
+		  // frame) can toggle/recolour it without a view pointer.
+		  static void			Set_Show_Backface_Tint (bool onoff)			{ s_ShowBackfaceTint = onoff; }
+		  static bool			Is_Show_Backface_Tint (void)				{ return s_ShowBackfaceTint; }
+		  static void			Set_Backface_Tint_Color (const Vector3 &c)	{ s_BackfaceTintColor = c; }
+		  static const Vector3 &Get_Backface_Tint_Color (void)				{ return s_BackfaceTintColor; }
+
+		  // Renders the backface-tint second pass on `scene`/`camera` when the toggle
+		  // is on (no-op otherwise). Shared by the main viewport and the Material
+		  // Viewer preview so the pass logic lives in one place.
+		  static void			Render_Backface_Tint_Pass (class SceneClass *scene, class CameraClass *camera);
+
+		  // Colour conversions between the viewer's 0..1 float Vector3 and Win32's
+		  // 0..255 COLORREF, used by the tint-colour menu handlers.
+		  static COLORREF		Tint_Color_To_ColorRef (const Vector3 &c);
+		  static Vector3		ColorRef_To_Tint_Color (COLORREF c);
+
         //
         // Object rotation methods
         //
@@ -271,6 +290,9 @@ protected:
 		  OBJECT_ROTATION		m_LightRotation;
         CAMERA_ROTATION		m_allowedCameraRotation;
         bool					m_InvertCameraY;
+
+        static bool				s_ShowBackfaceTint;
+        static Vector3			s_BackfaceTintColor;
 };
 
 /////////////////////////////////////////////////////////////////////////////

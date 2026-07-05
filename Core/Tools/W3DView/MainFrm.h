@@ -314,6 +314,9 @@ protected:
 	afx_msg void OnUpdateShaderAlphaBlendTest(CCmdUI* pCmdUI);
 	afx_msg void OnShaderDoubleSided();
 	afx_msg void OnUpdateShaderDoubleSided(CCmdUI* pCmdUI);
+	afx_msg void OnShaderBackfaceTint();
+	afx_msg void OnUpdateShaderBackfaceTint(CCmdUI* pCmdUI);
+	afx_msg void OnShaderBackfaceTintColor();
 	afx_msg void OnShowSubObjNames();
 	afx_msg void OnUpdateShowSubObjNames(CCmdUI* pCmdUI);
 	afx_msg void OnShowBoneNames();

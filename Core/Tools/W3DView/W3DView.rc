@@ -266,6 +266,8 @@ BEGIN
             MENUITEM "Alpha Blend and Test",        IDM_SHADER_ALPHA_BLEND_TEST
             MENUITEM SEPARATOR
             MENUITEM "Double-Sided",                IDM_SHADER_DOUBLE_SIDED
+            MENUITEM "Back Faces Tinted",           IDM_SHADER_BACKFACE_TINT
+            MENUITEM "Back Face Tint Color...",     IDM_SHADER_BACKFACE_TINT_COLOR
         END
         POPUP "Texture &Filtering"
         BEGIN
@@ -455,6 +457,8 @@ BEGIN
             MENUITEM "Alpha Blend and Test",        IDM_SHADER_ALPHA_BLEND_TEST
             MENUITEM SEPARATOR
             MENUITEM "Double-Sided",                IDM_SHADER_DOUBLE_SIDED
+            MENUITEM "Back Faces Tinted",           IDM_SHADER_BACKFACE_TINT
+            MENUITEM "Back Face Tint Color...",     IDM_SHADER_BACKFACE_TINT_COLOR
         END
     END
 END
@@ -3053,6 +3057,8 @@ BEGIN
     IDM_SHADER_ALPHA_BLEND  "Toggles alpha blend shaders on/off.\nAlpha Blend"
     IDM_SHADER_ALPHA_BLEND_TEST "Toggles alpha blend and test shaders on/off.\nAlpha Blend and Test"
     IDM_SHADER_DOUBLE_SIDED "Toggles double-sided rendering on/off.\nDouble-Sided"
+    IDM_SHADER_BACKFACE_TINT "Toggles a tint on the normally-hidden back faces on/off.\nBack Faces Tinted"
+    IDM_SHADER_BACKFACE_TINT_COLOR "Choose the colour used to tint the back faces.\nBack Face Tint Color"
     IDM_CAMERA_BONE_POS_X   "Camera should look down +X axis"
     ID_VIEW_SUBDIVISION_1   "Triangles are not sub-divided"
     ID_VIEW_SUBDIVISION_2   "Each triangle is split into four triangles"

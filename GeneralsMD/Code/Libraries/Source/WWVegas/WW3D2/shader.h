@@ -341,6 +341,12 @@ public:
 	static void				Force_Double_Sided(bool onoff);
 	static bool				Is_Double_Sided_Forced();
 
+	// TheSuperHackers @feature Tria Global backface-tint override for W3DView preview:
+	// when set, Apply() culls FRONT faces (D3DCULL_CCW) so a second render pass draws
+	// only the normally-hidden back faces. Colouring is set up by the caller (texturing
+	// off + ambient) around that pass.
+	static void				Force_Backface_Tint(bool onoff);
+
 	// TheSuperHackers @feature Tria 18/04/2026 Per-category shader visibility filters for W3DView.
 	static void				Set_Filter_Additive(bool onoff);
 	static bool				Get_Filter_Additive();
@@ -461,6 +467,7 @@ protected:
 	static unsigned long CurrentShader;
 	static bool _ForceAlphaBlending;
 	static bool _ForceDoubleSided;
+	static bool _ForceBackfaceTint;
 };
 
 inline void ShaderClass::Reset()

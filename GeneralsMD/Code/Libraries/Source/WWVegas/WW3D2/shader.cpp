@@ -51,6 +51,7 @@ bool ShaderClass::ShaderDirty=true;
 unsigned long ShaderClass::CurrentShader=0;
 bool ShaderClass::_ForceAlphaBlending=false;
 bool ShaderClass::_ForceDoubleSided=false;
+bool ShaderClass::_ForceBackfaceTint=false;
 // TheSuperHackers @feature Tria 18/04/2026 Per-category shader visibility filters.
 static bool _FilterAdditive=true;
 static bool _FilterAlphaTest=true;
@@ -1073,7 +1074,13 @@ void ShaderClass::Apply()
 
 	// CULLMODE
 	// TheSuperHackers @feature Tria 22/04/2026 Force double-sided rendering when enabled.
-	DX8Wrapper::Set_DX8_Render_State(D3DRS_CULLMODE, (_ForceDoubleSided || !Get_Cull_Mode()) ? D3DCULL_NONE : _PolygonCullMode);
+	// TheSuperHackers @feature Tria Backface-tint pass culls FRONT faces so only the
+	// normally-hidden back faces draw (the caller sets up the flat colour around it).
+	if (_ForceBackfaceTint) {
+		DX8Wrapper::Set_DX8_Render_State(D3DRS_CULLMODE, D3DCULL_CCW);
+	} else {
+		DX8Wrapper::Set_DX8_Render_State(D3DRS_CULLMODE, (_ForceDoubleSided || !Get_Cull_Mode()) ? D3DCULL_NONE : _PolygonCullMode);
+	}
 
 	// NPATCHES
 	if (diff&ShaderClass::MASK_NPATCHENABLE) {
@@ -1229,6 +1236,13 @@ void ShaderClass::Force_Double_Sided(bool onoff)
 bool ShaderClass::Is_Double_Sided_Forced()
 {
 	return _ForceDoubleSided;
+}
+
+// TheSuperHackers @feature Tria Global backface-tint override for W3DView preview.
+void ShaderClass::Force_Backface_Tint(bool onoff)
+{
+	_ForceBackfaceTint = onoff;
+	Invalidate();
 }
 
 // TheSuperHackers @feature Tria 18/04/2026 Per-category shader visibility filters.

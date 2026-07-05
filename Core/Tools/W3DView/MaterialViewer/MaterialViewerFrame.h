@@ -93,6 +93,9 @@ protected:
 	afx_msg void OnUpdateShaderAlphaBlendTest(CCmdUI *cmd_ui);
 	afx_msg void OnShaderDoubleSided();
 	afx_msg void OnUpdateShaderDoubleSided(CCmdUI *cmd_ui);
+	afx_msg void OnShaderBackfaceTint();
+	afx_msg void OnUpdateShaderBackfaceTint(CCmdUI *cmd_ui);
+	afx_msg void OnShaderBackfaceTintColor();
 	afx_msg LRESULT OnThemeChanged(WPARAM wparam, LPARAM lparam);
 	DECLARE_MESSAGE_MAP()
 

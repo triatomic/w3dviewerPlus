@@ -568,6 +568,41 @@ void CALLBACK fnTimerCallback (UINT, UINT, DWORD, DWORD, DWORD);
 
 IMPLEMENT_DYNCREATE(CGraphicView, CView)
 
+// TheSuperHackers @feature Tria Session-only toggle + colour for the backface tint pass.
+bool CGraphicView::s_ShowBackfaceTint = false;
+Vector3 CGraphicView::s_BackfaceTintColor (0.63f, 0.38f, 0.78f);	// default purple
+
+// Second pass: draw the normally-culled back faces flat-tinted with the tint colour.
+// Cull is inverted via ShaderClass; the colour comes from a flat ambient on untextured
+// geometry. No-op unless the toggle is on. Shared by the main viewport and the Material
+// Viewer preview.
+void CGraphicView::Render_Backface_Tint_Pass (SceneClass *scene, CameraClass *camera)
+{
+	if (!s_ShowBackfaceTint || scene == nullptr) {
+		return;
+	}
+
+	Vector3 saved_ambient = scene->Get_Ambient_Light ();
+	ShaderClass::Force_Backface_Tint (true);
+	WW3D::Enable_Texturing (false);
+	scene->Set_Ambient_Light (s_BackfaceTintColor);
+	WW3D::Render (scene, camera, FALSE, FALSE);
+	scene->Set_Ambient_Light (saved_ambient);
+	WW3D::Enable_Texturing (true);
+	ShaderClass::Force_Backface_Tint (false);
+}
+
+COLORREF CGraphicView::Tint_Color_To_ColorRef (const Vector3 &c)
+{
+	return RGB ((int)(c.X * 255.0f + 0.5f),
+		(int)(c.Y * 255.0f + 0.5f), (int)(c.Z * 255.0f + 0.5f));
+}
+
+Vector3 CGraphicView::ColorRef_To_Tint_Color (COLORREF c)
+{
+	return Vector3 (GetRValue (c) / 255.0f, GetGValue (c) / 255.0f, GetBValue (c) / 255.0f);
+}
+
 
 ////////////////////////////////////////////////////////////////////////////
 //
@@ -1108,6 +1143,10 @@ CGraphicView::RepaintView
 		DWORD profile_time = ::Get_CPU_Clock (pt_high);
 
 		WW3D::Render (doc->GetScene (), m_pCamera, FALSE, FALSE);
+
+		// TheSuperHackers @feature Tria Second pass: tint the normally-culled back
+		// faces (gated by the View > W3D Shaders menu toggle).
+		Render_Backface_Tint_Pass (doc->GetScene (), m_pCamera);
 
 		// Wait for all rendering to complete before stopping benchmark.
 		DWORD milliseconds = (::Get_CPU_Clock (pt_high) - profile_time) / 1000;

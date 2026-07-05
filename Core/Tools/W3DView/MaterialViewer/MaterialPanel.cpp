@@ -2469,6 +2469,28 @@ HWND GetPanelHwnd()
 	return (g_Panel != nullptr) ? (HWND)g_Panel->winId() : nullptr;
 }
 
+// Qt colour picker bridged behind a Qt-free (COLORREF) signature. Uses the native
+// QColorDialog so it matches the rest of the Material Viewer's Qt UI. Parented to
+// the panel widget when one exists.
+bool PickColor(COLORREF initial, COLORREF &chosen)
+{
+	// The dialog needs a live QApplication. It exists once the panel has been
+	// created, but this can be invoked from the main frame before the Material
+	// Viewer was ever opened, so ensure it here.
+	if (!Ensure_Application()) {
+		return false;
+	}
+
+	QColor start(GetRValue(initial), GetGValue(initial), GetBValue(initial));
+	QColor picked = QColorDialog::getColor(start, g_Panel,
+		QStringLiteral("Back Face Tint Color"));
+	if (!picked.isValid()) {
+		return false;	// cancelled
+	}
+	chosen = RGB(picked.red(), picked.green(), picked.blue());
+	return true;
+}
+
 void ResizePanel(int width, int height)
 {
 	if (g_Panel != nullptr) {

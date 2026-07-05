@@ -133,6 +133,12 @@ void PumpQtEvents();
 // Deletes the QApplication. Call at app exit, after DestroyPanel.
 void ShutdownQt();
 
+// Opens the Qt colour picker (QColorDialog) seeded with `initial`, parented off
+// the panel if it exists. On OK, writes the chosen colour to `chosen` and returns
+// true; returns false if the user cancelled. Qt-free signature (COLORREF) so MFC
+// callers need no Qt headers.
+bool PickColor(COLORREF initial, COLORREF &chosen);
+
 } // namespace W3dMaterialViewer
 
 #endif // W3DVIEW_HAS_QT

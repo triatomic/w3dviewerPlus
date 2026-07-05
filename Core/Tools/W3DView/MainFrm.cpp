@@ -20,6 +20,7 @@
 //
 
 #include "StdAfx.h"
+#include <afxdlgs.h>	// CColorDialog
 #include "W3DView.h"
 
 #include "MainFrm.h"
@@ -60,6 +61,9 @@
 #include "ViewerScene.h"
 #include "W3DDarkMode.h"
 #include "MaterialViewer/MaterialViewerFrame.h"
+#ifdef W3DVIEW_HAS_QT
+#include "MaterialViewer/MaterialPanel.h"	// W3dMaterialViewer::PickColor (Qt colour dialog)
+#endif
 #include "JobSystem.h"
 
 #include <string>
@@ -366,6 +370,9 @@ BEGIN_MESSAGE_MAP(CMainFrame, CFrameWnd)
 	ON_UPDATE_COMMAND_UI(IDM_SHADER_ALPHA_BLEND_TEST, OnUpdateShaderAlphaBlendTest)
 	ON_COMMAND(IDM_SHADER_DOUBLE_SIDED, OnShaderDoubleSided)
 	ON_UPDATE_COMMAND_UI(IDM_SHADER_DOUBLE_SIDED, OnUpdateShaderDoubleSided)
+	ON_COMMAND(IDM_SHADER_BACKFACE_TINT, OnShaderBackfaceTint)
+	ON_UPDATE_COMMAND_UI(IDM_SHADER_BACKFACE_TINT, OnUpdateShaderBackfaceTint)
+	ON_COMMAND(IDM_SHADER_BACKFACE_TINT_COLOR, OnShaderBackfaceTintColor)
 	ON_COMMAND(IDM_SHOW_SUBOBJ_NAMES, OnShowSubObjNames)
 	ON_UPDATE_COMMAND_UI(IDM_SHOW_SUBOBJ_NAMES, OnUpdateShowSubObjNames)
 	ON_COMMAND(IDM_SHOW_BONE_NAMES, OnShowBoneNames)
@@ -5475,6 +5482,41 @@ void CMainFrame::OnShaderDoubleSided()
 void CMainFrame::OnUpdateShaderDoubleSided(CCmdUI *pCmdUI)
 {
 	pCmdUI->SetCheck(ShaderClass::Is_Double_Sided_Forced() ? 1 : 0);
+}
+
+// TheSuperHackers @feature Tria Toggle rendering of the normally-culled back faces
+// as a flat tint. Driven by a second render pass in CGraphicView (the mesh renderer
+// defers draws past the scene pass, so the tint is applied at that outer render
+// level rather than inside SceneClass::Render).
+void CMainFrame::OnShaderBackfaceTint()
+{
+	CGraphicView::Set_Show_Backface_Tint(!CGraphicView::Is_Show_Backface_Tint());
+}
+
+void CMainFrame::OnUpdateShaderBackfaceTint(CCmdUI *pCmdUI)
+{
+	pCmdUI->SetCheck(CGraphicView::Is_Show_Backface_Tint() ? 1 : 0);
+}
+
+// TheSuperHackers @feature Tria Pick the back-face tint colour. Uses the Qt colour
+// picker when the material viewer's Qt panel is built (matching the rest of that UI),
+// falling back to the MFC colour dialog otherwise. (0..1 float Vector3 <-> 0..255 COLORREF.)
+void CMainFrame::OnShaderBackfaceTintColor()
+{
+	COLORREF initial = CGraphicView::Tint_Color_To_ColorRef(CGraphicView::Get_Backface_Tint_Color());
+
+	COLORREF chosen = initial;
+	bool ok;
+#ifdef W3DVIEW_HAS_QT
+	ok = W3dMaterialViewer::PickColor(initial, chosen);
+#else
+	CColorDialog dlg(initial, CC_FULLOPEN, this);
+	ok = (dlg.DoModal() == IDOK);
+	if (ok) chosen = dlg.GetColor();
+#endif
+	if (ok) {
+		CGraphicView::Set_Backface_Tint_Color(CGraphicView::ColorRef_To_Tint_Color(chosen));
+	}
 }
 
 void CMainFrame::OnShowSubObjNames()

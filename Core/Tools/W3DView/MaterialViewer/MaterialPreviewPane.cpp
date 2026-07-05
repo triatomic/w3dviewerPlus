@@ -32,6 +32,7 @@
 #include "vertmaterial.h"
 #include "w3d_file.h"
 #include "ww3d.h"
+#include "../GraphicView.h"	// backface-tint toggle + colour (shared with main viewport)
 #include "../W3DDarkMode.h"
 #include "../W3DViewDoc.h"
 
@@ -539,6 +540,11 @@ CMaterialPreviewPane::Render()
 
 	WW3D::Begin_Render(true, true, Vector3(bg, bg, bg));
 	WW3D::Render(m_Scene, m_Camera, FALSE, FALSE);
+
+	// TheSuperHackers @feature Tria Second pass: tint the normally-culled back faces,
+	// matching the main viewport (shared toggle + colour + pass logic).
+	CGraphicView::Render_Backface_Tint_Pass(m_Scene, m_Camera);
+
 	WW3D::End_Render(false);
 
 	HRESULT hr = m_SwapChain->Present(nullptr, nullptr, nullptr, nullptr);

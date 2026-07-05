@@ -190,6 +190,9 @@ BEGIN_MESSAGE_MAP(CMaterialViewerFrame, CFrameWnd)
 	ON_UPDATE_COMMAND_UI(IDM_SHADER_ALPHA_BLEND_TEST, OnUpdateShaderAlphaBlendTest)
 	ON_COMMAND(IDM_SHADER_DOUBLE_SIDED, OnShaderDoubleSided)
 	ON_UPDATE_COMMAND_UI(IDM_SHADER_DOUBLE_SIDED, OnUpdateShaderDoubleSided)
+	ON_COMMAND(IDM_SHADER_BACKFACE_TINT, OnShaderBackfaceTint)
+	ON_UPDATE_COMMAND_UI(IDM_SHADER_BACKFACE_TINT, OnUpdateShaderBackfaceTint)
+	ON_COMMAND(IDM_SHADER_BACKFACE_TINT_COLOR, OnShaderBackfaceTintColor)
 	ON_MESSAGE(WM_W3DVIEW_THEME_CHANGED, OnThemeChanged)
 END_MESSAGE_MAP()
 
@@ -256,6 +259,33 @@ void CMaterialViewerFrame::OnShaderDoubleSided()
 void CMaterialViewerFrame::OnUpdateShaderDoubleSided(CCmdUI *cmd_ui)
 {
 	cmd_ui->SetCheck(ShaderClass::Is_Double_Sided_Forced() ? 1 : 0);
+}
+
+// TheSuperHackers @feature Tria The Back Faces Tinted toggle is a viewer-wide setting
+// applied by CGraphicView's second render pass; mirror the command here so the menu
+// item is enabled (not greyed) and its check stays in sync while the Material Viewer
+// is the active frame.
+void CMaterialViewerFrame::OnShaderBackfaceTint()
+{
+	CGraphicView::Set_Show_Backface_Tint(!CGraphicView::Is_Show_Backface_Tint());
+}
+
+void CMaterialViewerFrame::OnUpdateShaderBackfaceTint(CCmdUI *cmd_ui)
+{
+	cmd_ui->SetCheck(CGraphicView::Is_Show_Backface_Tint() ? 1 : 0);
+}
+
+// TheSuperHackers @feature Tria Pick the back-face tint colour via the Qt colour
+// picker (to match the rest of the Material Viewer UI). Converts between the viewer's
+// 0..1 float Vector3 and Win32's 0..255 COLORREF.
+void CMaterialViewerFrame::OnShaderBackfaceTintColor()
+{
+	COLORREF initial = CGraphicView::Tint_Color_To_ColorRef(CGraphicView::Get_Backface_Tint_Color());
+
+	COLORREF chosen = initial;
+	if (W3dMaterialViewer::PickColor(initial, chosen)) {
+		CGraphicView::Set_Backface_Tint_Color(CGraphicView::ColorRef_To_Tint_Color(chosen));
+	}
 }
 
 CMaterialViewerFrame::CMaterialViewerFrame()
