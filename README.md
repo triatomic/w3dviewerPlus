@@ -1,105 +1,114 @@
-[![GitHub Release](https://img.shields.io/github/v/release/TheSuperHackers/GeneralsGameCode?include_prereleases&sort=date&display_name=tag&style=flat&label=Release)](https://github.com/TheSuperHackers/GeneralsGameCode/releases)
-![GitHub milestone details](https://img.shields.io/github/milestones/progress-percent/TheSuperHackers/GeneralsGameCode/3)
-![GitHub milestone details](https://img.shields.io/github/milestones/progress-percent/TheSuperHackers/GeneralsGameCode/1)
-![GitHub milestone details](https://img.shields.io/github/milestones/progress-percent/TheSuperHackers/GeneralsGameCode/4)
-![GitHub milestone details](https://img.shields.io/github/milestones/progress-percent/TheSuperHackers/GeneralsGameCode/5)
-![GitHub milestone details](https://img.shields.io/github/milestones/progress-percent/TheSuperHackers/GeneralsGameCode/6)
+[![Download latest release](https://img.shields.io/github/v/release/triatomic/w3dviewerPlus?include_prereleases&sort=date&display_name=tag&style=for-the-badge&label=Download%20W3DView%2B&color=2ea44f)](https://github.com/triatomic/w3dviewerPlus/releases/latest)
+[![Latest release](https://img.shields.io/github/release-date/triatomic/w3dviewerPlus?style=flat&label=Released)](https://github.com/triatomic/w3dviewerPlus/releases/latest)
 
-[![GitHub issues by-label](https://img.shields.io/github/issues/TheSuperHackers/GeneralsGameCode/bug?style=flat&label=Bug%20Issues&labelColor=%23c4c4c4&color=%23424242)](https://github.com/TheSuperHackers/GeneralsGameCode/issues?q=label%3ABug)
-[![GitHub issues by-label](https://img.shields.io/github/issues/TheSuperHackers/GeneralsGameCode/enhancement?style=flat&label=Enhancement%20Issues&labelColor=%23c4c4c4&color=%23424242)](https://github.com/TheSuperHackers/GeneralsGameCode/issues?q=label%3AEnhancement)
-[![GitHub issues by-label](https://img.shields.io/github/issues/TheSuperHackers/GeneralsGameCode/major?style=flat&label=Major%20Issues&labelColor=%23c4c4c4&color=%23424242)](https://github.com/TheSuperHackers/GeneralsGameCode/issues?q=label%3AMajor)
-[![GitHub issues by-label](https://img.shields.io/github/issues/TheSuperHackers/GeneralsGameCode/critical?style=flat&label=Critical%20Issues&labelColor=%23c4c4c4&color=%23424242)](https://github.com/TheSuperHackers/GeneralsGameCode/issues?q=label%3ACritical)
-[![GitHub issues by-label](https://img.shields.io/github/issues/TheSuperHackers/GeneralsGameCode/blocker?style=flat&label=Blocker%20Issues&labelColor=%23c4c4c4&color=%23424242)](https://github.com/TheSuperHackers/GeneralsGameCode/issues?q=label%3ABlocker)
+# W3DView+
 
-# Welcome to the Generals Game Code Project
+**W3DView+** is an enhanced build of the Westwood 3D model viewer (`W3DView`) for
+*Command & Conquer: Generals* and *Zero Hour*, built on the
+[TheSuperHackers GeneralsGameCode](https://github.com/TheSuperHackers/GeneralsGameCode)
+engine. It adds a modern dark theme, a full Qt-based material editor, camera and
+lighting improvements, and a ground-plane preview — on top of the original tool
+for inspecting `.w3d` meshes, hierarchies, animations, and materials.
 
-GeneralsGameCode is a community-driven project aimed at fixing and improving the classic RTS game, *Command &
-Conquer: Generals* and its expansion *Zero Hour*. This repository contains the source code for both games, with a
-primary focus on *Zero Hour*.
+## Download
 
-Additionally, there is a complementary project repository for fixing and improving game data and assets such as
-INI scripts, GUI, AI, maps, models, textures, audio, localization. You can find it
-[here](https://github.com/TheSuperHackers/GeneralsGamePatch/) and contribute to it as well.
+**➡️ [Download the latest release](https://github.com/triatomic/w3dviewerPlus/releases/latest)**
 
-## Project Overview
+Grab the `W3DViewZH-<version>.zip` asset from the latest release. It is a
+self-contained bundle — no separate install needed.
 
-The game was originally developed using Visual Studio 6 and C++98. We've updated the code to be compatible with Visual
-Studio 2022 and C++20.
+## Running
 
-The initial goal of this project is to fix critical bugs and implement improvements while maintaining compatibility with
-the original *Generals* version 1.08 and *Zero Hour* version 1.04. Once we can break retail compatibility, more fixes
-and features will be possible to implement.
+1. Download and extract `W3DViewZH-<version>.zip` anywhere.
+2. Run **`W3DViewZH.exe`**.
 
-## Current Focus and Future Plans
+The zip already includes everything the viewer needs to run:
 
-Here's an overview of our current focus and future plans
+```
+W3DViewZH.exe          the viewer
+Qt5Core.dll            Qt runtime (material editor panel)
+Qt5Gui.dll
+Qt5Widgets.dll
+mss32.dll              Miles audio
+platforms/qwindows.dll Qt platform plugin (must stay in this subfolder)
+```
 
-- **Modernizing the Codebase**: Transitioning to modern C++ standards and refactoring old code.
-- **Critical Bug Fixes**: Fixing game-breaking issues (e.g., fullscreen crash).
-- **Minor Bug Fixes**: Addressing minor bugs (e.g., UI issues, graphical glitches).
-- **Cross-Platform Support**: Adding support for more platforms (e.g., Linux, macOS).
-- **Engine Improvements**: Enhancing the game engine to improve performance and stability.
-- **Client-Side Features**: Enhancing the game's client with features such as an improved replay viewer and UI updates.
-- **Multiplayer Improvements**: Implementing a new game server and an upgraded matchmaking lobby.
-- **Tooling Improvements**: Developing new or improving existing tools for modding and game development.
-- **Community-Driven Improvements**: Once the community grows, we plan to incorporate more features, updates, and
-  changes based on player feedback.
+Keep these files together — in particular, `platforms/qwindows.dll` must remain
+in its `platforms` subfolder next to the exe, or the Qt material panel will not
+load.
 
-## Running the Game
+To view a model, use **File → Open** (or drag a `.w3d` file — or a whole folder
+of them — onto the window). Textures are resolved from the folders alongside the
+`.w3d` files.
 
-To run *Generals* or *Zero Hour* using this project, you need to have the original *Command & Conquer: Generals and Zero Hour* game
-installed. The easiest way to get it is through *Command & Conquer The Ultimate Collection*
-on [Steam](https://store.steampowered.com/bundle/39394). Once the game is ready, download the latest version of the
-project from [GitHub Releases](https://github.com/TheSuperHackers/GeneralsGameCode/releases), extract the necessary 
-files, and follow the instructions in the [Wiki](https://github.com/TheSuperHackers/GeneralsGameCode/wiki).
+## New features
 
+Everything below is added by W3DView+ on top of the stock tool:
 
-## Joining the Community
+**Material editor (Qt panel)**
+- A full material editor replicating the 3ds Max W3D material UI, fed directly
+  from the raw `.w3d` chunk data.
+- Open several `.w3d` files at once, one tab per file.
+- Live preview: edits to vertex materials, shaders, mappers, and **Clamp U/V**
+  update the 3D preview immediately.
+- Status-bar help describing mapper arguments and the UV mapping type; `+`/`×`
+  buttons to add and remove mapper-arg lines.
+- Copy/paste buttons for the material panel's settings groups.
 
-You can chat and discuss the development of the project on our [Discord channel](https://www.community-outpost.com/discord) to get the latest updates,
-report bugs, and contribute to the project!
+**Viewport & camera**
+- Reworked 3ds Max–style orbit camera; the Material Viewer preview matches the
+  main viewport's full control set.
+- Vertical camera invert defaults to on (configurable).
+- **Ground plane** (new **Ground** menu, in both the main viewport and the
+  Material Viewer): a checkered plane with a soft blob shadow under the model.
+  It is lit by the scene, so moving the light sweeps a pool of light across it;
+  additive/alpha glow from the model blends onto the ground. Adjustable height
+  and reset.
+- **Back-face tint**: render normally-culled back faces in a pickable colour so
+  you can inspect the inside of a mesh without changing its Double-Sided flag.
 
-## Building the Game Yourself
+**Lighting**
+- Movable scene light in the Material Viewer preview.
+- **Light** menu with Free Roam / Per Face placement modes.
 
-We provide support for building the project on Windows and Linux. For detailed build instructions, check the
-[Wiki](https://github.com/TheSuperHackers/GeneralsGameCode/wiki/build_guides), which includes guides for VS6, VS2022,
-Docker, CLion, and links to forks supporting additional versions.
+**Theme**
+- Full dark mode (ported from Notepad++'s NppDarkMode), following the Windows
+  app theme by default, covering the menus, toolbars, tree, and viewport.
 
-### Quick Start
+## Building
+
+The project uses CMake with Visual Studio 2022. The W3DView+ tool builds as the
+`z_w3dview` target (produces `W3DViewZH.exe`).
 
 **Windows (Visual Studio 2022)**
+
 ```bash
 cmake --preset win32
-cmake --build build/win32 --config Release
+cmake --build build/win32 --target z_w3dview --config Release
 ```
 
-**Linux (via Docker)**
-```bash
-./scripts/docker-build.sh              # Build using Docker
-./scripts/docker-install.sh --detect # Install to your game
-```
+The built viewer lands at `build/win32/GeneralsMD/Release/W3DViewZH.exe`, with
+the Qt and Miles runtime DLLs copied alongside it automatically.
 
-### Dependency management
+> The Qt material panel requires Qt5 (Core/Gui/Widgets). It is provided through
+> the vcpkg manifest (`vcpkg.json`); the first configure resolves it. Without
+> Qt, the viewer still builds and runs, but the material-editor panel is
+> replaced by a placeholder.
 
-The repository uses a vcpkg manifest (`vcpkg.json`) paired with a lockfile (`vcpkg-lock.json`). When you add or upgrade
-dependencies, run `vcpkg install --x-manifest-root . --triplet <triplet>` with `VCPKG_FEATURE_FLAGS=versions` so the
-lockfile picks up the new versions and include the updated lockfile in your change. GitHub Actions consumes these ports
-through `VCPKG_BINARY_SOURCES=clear;files,<workspace>/vcpkg-bincache,readwrite` (paired with an `actions/cache` entry for
-that folder), so the first CI build warms the cache and subsequent builds pull prebuilt binaries instead of
-re-compiling everything.
+For the full engine and the other build guides (VS6, CLion, Docker/Linux), see
+the upstream
+[TheSuperHackers Wiki](https://github.com/TheSuperHackers/GeneralsGameCode/wiki/build_guides).
 
-## Contributing
+## Credits & License
 
-We welcome contributions to the project! If you’re interested in contributing, you need to have knowledge of C++. Join
-the developer chat on Discord for more information on how to get started. Please make sure to read our
-[Contributing Guidelines](CONTRIBUTING.md) before submitting a pull request. You can also check out 
-the [Wiki](https://github.com/TheSuperHackers/GeneralsGameCode/wiki) for more detailed documentation.
+W3DView+ is a fork of
+[TheSuperHackers GeneralsGameCode](https://github.com/TheSuperHackers/GeneralsGameCode),
+which is itself based on the source code released by Electronic Arts. The dark
+mode is a trimmed port of [Notepad++](https://github.com/notepad-plus-plus/notepad-plus-plus)'s
+NppDarkMode.
 
+EA has not endorsed and does not support this product. All trademarks are the
+property of their respective owners.
 
-## License & Legal Disclaimer
-
-EA has not endorsed and does not support this product. All trademarks are the property of their respective owners.
-
-This project is licensed under the [GPL-3.0 License](https://www.gnu.org/licenses/gpl-3.0.html), which allows you to
-freely modify and distribute the source code under the terms of this license. Please see [LICENSE.md](LICENSE.md) 
-for details.
+This project is licensed under the [GPL-3.0 License](https://www.gnu.org/licenses/gpl-3.0.html).
+See [LICENSE.md](LICENSE.md) for details.
