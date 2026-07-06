@@ -83,6 +83,19 @@ public:
 	void Set_Light_Placement_Mode(LightPlacementMode mode) { m_LightPlacementMode = mode; }
 	LightPlacementMode Get_Light_Placement_Mode() const { return m_LightPlacementMode; }
 
+	// Ground plane (View > Show Ground Plane): a simple checkered quad drawn
+	// below the object with a soft blob shadow under its footprint. Drawn before
+	// the scene render, so the object's translucent/additive parts (flushed last
+	// by WW3D) blend over it — additive "glow" falls onto the ground for free.
+	void Set_Ground_Visible(bool visible) { m_GroundVisible = visible; }
+	bool Is_Ground_Visible() const { return m_GroundVisible; }
+	void Set_Ground_Z(float z) { m_GroundZ = z; }
+	float Get_Ground_Z() const { return m_GroundZ; }
+	// Height-slider bounds derived from the loaded object's bounding box
+	// (bottom +/- one span, so the default sits mid-slider); false while no
+	// model is loaded.
+	bool Get_Ground_Z_Range(float &z_min, float &z_max) const;
+
 	// Save/restore the full orbit-camera state so each Material Viewer tab can
 	// keep its own view. Captures the raw camera transform plus the orbit
 	// accumulators (centre / rotation / distance / zoom step) verbatim, so a
@@ -139,6 +152,11 @@ private:
 	// Must run inside the Begin_Render/End_Render bracket, after the scene.
 	void Render_Highlight_Outline();
 
+	// Draws the ground plane + blob shadow. Must run inside the render bracket
+	// BEFORE the scene render: the plane writes depth so opaque geometry
+	// occludes it, and the translucent flush afterwards blends glow over it.
+	void Render_Ground_Plane();
+
 	// Confines/wraps the cursor to the pane while dragging (infinite drag).
 	void Clip_Cursor_To_View();
 	bool Wrap_Cursor_In_View(CPoint &point);
@@ -165,6 +183,12 @@ private:
 
 	// Sub-object to outline in the full-object view; empty = no outline.
 	std::string			m_HighlightMeshName;
+
+	// Ground plane state. m_GroundZ defaults to the object's bounding-box
+	// bottom on every *new* model load (post-save reloads keep the user's
+	// height, like the camera).
+	bool				m_GroundVisible;
+	float				m_GroundZ;
 
 	// Orbit camera state — mirrors the main viewport (CGraphicView). The orbit
 	// centre and accumulated rotation are per-instance (the main view keeps its

@@ -317,6 +317,13 @@ protected:
 	afx_msg void OnShaderBackfaceTint();
 	afx_msg void OnUpdateShaderBackfaceTint(CCmdUI* pCmdUI);
 	afx_msg void OnShaderBackfaceTintColor();
+	// TheSuperHackers @feature Tria Ground menu (ground plane in the viewport).
+	afx_msg void OnGroundShow();
+	afx_msg void OnUpdateGroundShow(CCmdUI* pCmdUI);
+	afx_msg void OnGroundHeight();
+	afx_msg void OnUpdateGroundHeight(CCmdUI* pCmdUI);
+	afx_msg void OnGroundReset();
+	afx_msg void OnUpdateGroundReset(CCmdUI* pCmdUI);
 	afx_msg void OnShowSubObjNames();
 	afx_msg void OnUpdateShowSubObjNames(CCmdUI* pCmdUI);
 	afx_msg void OnShowBoneNames();

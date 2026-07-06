@@ -658,6 +658,14 @@
 // TheSuperHackers @feature Material Viewer light-placement mode (Light menu).
 #define IDM_MATVIEWER_LIGHT_FREEROAM    32963
 #define IDM_MATVIEWER_LIGHT_PERFACE     32964
+// TheSuperHackers @feature Tria Material Viewer ground plane (View menu toggle).
+#define IDM_MATVIEWER_GROUND            32965
+// TheSuperHackers @feature Tria Main-viewport ground plane (Ground menu).
+#define IDM_GROUND_SHOW                 32966
+#define IDM_GROUND_HEIGHT               32967
+#define IDM_GROUND_RESET                32968
+#define IDD_GROUND_HEIGHT               731
+#define IDC_GROUND_HEIGHT_SLIDER        1189
 // TheSuperHackers @feature Tria 22/04/2026 Show sub-object and bone name labels in viewport.
 #define IDM_SHOW_SUBOBJ_NAMES           32940
 #define IDM_SHOW_BONE_NAMES             32941
@@ -740,9 +748,9 @@
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_3D_CONTROLS                     1
-#define _APS_NEXT_RESOURCE_VALUE        731
-#define _APS_NEXT_COMMAND_VALUE         32965
-#define _APS_NEXT_CONTROL_VALUE         1189
+#define _APS_NEXT_RESOURCE_VALUE        732
+#define _APS_NEXT_COMMAND_VALUE         32969
+#define _APS_NEXT_CONTROL_VALUE         1190
 #define _APS_NEXT_SYMED_VALUE           101
 #endif
 #endif

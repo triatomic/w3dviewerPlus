@@ -131,6 +131,9 @@ protected:
 	afx_msg void OnUpdateLightFreeRoam(CCmdUI *cmd_ui);
 	afx_msg void OnLightPerFace();
 	afx_msg void OnUpdateLightPerFace(CCmdUI *cmd_ui);
+	afx_msg void OnShowGround();
+	afx_msg void OnUpdateShowGround(CCmdUI *cmd_ui);
+	afx_msg void OnVScroll(UINT sb_code, UINT pos, CScrollBar *scrollbar);
 	afx_msg void OnDropFiles(HDROP drop);
 	afx_msg LRESULT OnThemeChanged(WPARAM wparam, LPARAM lparam);
 	DECLARE_MESSAGE_MAP()
@@ -150,6 +153,11 @@ private:
 	void ReassertLayout();
 	void ApplyPanelTheme();
 	void UpdatePreviewModel();
+
+	// Positions the ground-height slider thumb from the pane's current ground Z
+	// (called when the toggle turns on and after every model change, which
+	// re-derives the slider's range from the new bounding box).
+	void SyncGroundSlider();
 	void OnPanelMeshSelected(const char *meshName);
 	static void PanelMeshSelectedThunk(const char *meshName);
 
@@ -228,6 +236,7 @@ private:
 
 	CMaterialPreviewPane	*m_Preview;
 	CStatic					m_PlaceholderText;	// shown where the Qt panel would be
+	CSliderCtrl				m_GroundSlider;		// ground height; visible with the toggle
 	HWND					m_PanelWnd;
 	HWND					m_TabBarWnd;		// Qt QTabBar hosted in the frame
 

@@ -52,6 +52,9 @@
 #include "vertmaterial.h"
 #include "htree.h"
 #include "camera.h"
+#include "aabox.h"
+#include "wwmath.h"
+#include "W3DDarkMode.h"
 #include "MaterialViewer/MaterialViewerFrame.h"
 #ifdef RTS_DEBUG
 #define new DEBUG_NEW
@@ -603,6 +606,163 @@ Vector3 CGraphicView::ColorRef_To_Tint_Color (COLORREF c)
 	return Vector3 (GetRValue (c) / 255.0f, GetGValue (c) / 255.0f, GetBValue (c) / 255.0f);
 }
 
+// TheSuperHackers @feature Tria Ground plane: a checkered quad at ground_z plus
+// a soft elliptical blob shadow under the object's footprint (fixed-function
+// DX8 has no real shadow casting; a blob matches what the game itself ships).
+// Runs inside the render bracket BEFORE the scene render on purpose: the plane
+// writes depth first, so the object's opaque parts occlude it correctly, and
+// WW3D's sorted translucent flush afterwards blends the object's alpha/additive
+// "glow" over the ground. Shared by the main viewport and the Material Viewer
+// preview pane.
+void CGraphicView::Render_Ground (CameraClass *camera, RenderObjClass *obj, const SphereClass &sphere, float ground_z)
+{
+	if (camera == nullptr) {
+		return;
+	}
+
+	IDirect3DDevice8 *dev = DX8Wrapper::_Get_D3D_Device8 ();
+	if (dev == nullptr) {
+		return;
+	}
+
+	// Size/centre from the displayed object; sane fallback while nothing is loaded.
+	SphereClass bounds = (obj != nullptr) ? obj->Get_Bounding_Sphere () : sphere;
+	float radius = (bounds.Radius > 0.01F) ? bounds.Radius : 10.0F;
+	Vector3 foot_center = bounds.Center;
+	float foot_x = radius * 0.5F;
+	float foot_y = radius * 0.5F;
+	if (obj != nullptr) {
+		const AABoxClass &box = obj->Get_Bounding_Box ();
+		foot_center = box.Center;
+		foot_x = box.Extent.X;
+		foot_y = box.Extent.Y;
+	}
+
+	// The scene render has not run yet this frame, so push this camera's
+	// viewport + view/projection to the device first (WW3D::Render re-applies
+	// them right after, so this affects only these two draws).
+	camera->Apply ();
+
+	ShaderClass shader = ShaderClass::_PresetOpaqueSolidShader;
+	DX8Wrapper::Set_Shader (shader);
+	DX8Wrapper::Set_Texture (0, nullptr);
+
+	VertexMaterialClass *vm = VertexMaterialClass::Get_Preset (VertexMaterialClass::PRELIT_DIFFUSE);
+	DX8Wrapper::Set_Material (vm);
+	if (vm != nullptr) {
+		vm->Release_Ref ();
+	}
+
+	Matrix3D identity (true);
+	DX8Wrapper::Set_Transform (D3DTS_WORLD, identity);
+	DX8Wrapper::Apply_Render_State_Changes ();
+
+	struct GroundVertex { float x, y, z; DWORD color; };
+
+	// --- Checker plane: CELLS x CELLS cells over a square of 3x the bounding
+	// radius, two grey tones per theme. ---
+	const int CELLS = 8;
+	const bool dark = W3DDarkMode::IsDark ();
+	const DWORD tone_a = dark ? 0xFF3A3C40 : 0xFF9A9CA0;
+	const DWORD tone_b = dark ? 0xFF2C2E32 : 0xFF808286;
+
+	float half = radius * 3.0F;
+	float cell = (half * 2.0F) / CELLS;
+	GroundVertex plane_verts[CELLS * CELLS * 6];
+	int v = 0;
+	for (int cy = 0; cy < CELLS; cy++) {
+		for (int cx = 0; cx < CELLS; cx++) {
+			float x0 = foot_center.X - half + cx * cell;
+			float y0 = foot_center.Y - half + cy * cell;
+			float x1 = x0 + cell;
+			float y1 = y0 + cell;
+			DWORD color = ((cx ^ cy) & 1) ? tone_a : tone_b;
+			GroundVertex quad[6] = {
+				{ x0, y0, ground_z, color }, { x1, y0, ground_z, color }, { x1, y1, ground_z, color },
+				{ x0, y0, ground_z, color }, { x1, y1, ground_z, color }, { x0, y1, ground_z, color },
+			};
+			for (int i = 0; i < 6; i++) {
+				plane_verts[v++] = quad[i];
+			}
+		}
+	}
+
+	dev->SetVertexShader (D3DFVF_XYZ | D3DFVF_DIFFUSE);
+	dev->DrawPrimitiveUP (D3DPT_TRIANGLELIST, CELLS * CELLS * 2, plane_verts, sizeof (GroundVertex));
+
+	// --- Blob shadow: elliptical fan over the object's XY footprint, dark
+	// centre fading to nothing at the rim; alpha-blended, no depth write,
+	// nudged above the plane to avoid z-fighting. ---
+	ShaderClass blob_shader = ShaderClass::_PresetAlphaSolidShader;
+	blob_shader.Set_Depth_Mask (ShaderClass::DEPTH_WRITE_DISABLE);
+	DX8Wrapper::Set_Shader (blob_shader);
+	DX8Wrapper::Apply_Render_State_Changes ();
+
+	const int SEGMENTS = 24;
+	float blob_z = ground_z + max (0.002F * radius, 0.001F);
+	float blob_x = foot_x * 1.2F;
+	float blob_y = foot_y * 1.2F;
+	GroundVertex fan_verts[SEGMENTS + 2];
+	fan_verts[0] = { foot_center.X, foot_center.Y, blob_z, 0x8C000000 };
+	for (int i = 0; i <= SEGMENTS; i++) {
+		float angle = (float)i * (2.0F * WWMATH_PI / SEGMENTS);
+		fan_verts[i + 1] = {
+			foot_center.X + WWMath::Cos (angle) * blob_x,
+			foot_center.Y + WWMath::Sin (angle) * blob_y,
+			blob_z, 0x00000000 };
+	}
+	dev->DrawPrimitiveUP (D3DPT_TRIANGLEFAN, SEGMENTS, fan_verts, sizeof (GroundVertex));
+
+	DX8Wrapper::Invalidate_Cached_Render_States ();
+}
+
+// Turning the plane on re-derives its height from the currently displayed
+// object, so it always appears directly underneath what is on screen.
+void CGraphicView::Set_Show_Ground (bool onoff)
+{
+	m_bShowGround = onoff;
+	if (onoff) {
+		Reset_Ground_To_Object ();
+	}
+}
+
+void CGraphicView::Reset_Ground_To_Object (void)
+{
+	CW3DViewDoc *doc = (CW3DViewDoc *)GetDocument ();
+	RenderObjClass *obj = (doc != nullptr) ? doc->GetDisplayedObject () : nullptr;
+	if (obj != nullptr) {
+		const AABoxClass &box = obj->Get_Bounding_Box ();
+		m_GroundZ = box.Center.Z - box.Extent.Z;
+	} else {
+		m_GroundZ = 0.0F;
+	}
+}
+
+// Same recipe as the Material Viewer pane: one full span (twice the half-
+// height, floored at the bounding radius) either side of the bounding-box
+// bottom, so the default height lands exactly mid-slider.
+bool CGraphicView::Get_Ground_Z_Range (float &z_min, float &z_max) const
+{
+	CW3DViewDoc *doc = (CW3DViewDoc *)GetDocument ();
+	RenderObjClass *obj = (doc != nullptr) ? doc->GetDisplayedObject () : nullptr;
+	if (obj == nullptr) {
+		return false;
+	}
+	const AABoxClass &box = obj->Get_Bounding_Box ();
+	float bottom = box.Center.Z - box.Extent.Z;
+	float span = box.Extent.Z * 2.0F;
+	float radius = obj->Get_Bounding_Sphere ().Radius;
+	if (span < radius) {
+		span = radius;
+	}
+	if (span < 1.0F) {
+		span = 1.0F;
+	}
+	z_min = bottom - span;
+	z_max = bottom + span;
+	return true;
+}
+
 
 ////////////////////////////////////////////////////////////////////////////
 //
@@ -632,6 +792,8 @@ CGraphicView::CGraphicView (void)
 		m_UpdateCounter (0),
       m_allowedCameraRotation (FreeRotation),
 		m_InvertCameraY (true),
+		m_bShowGround (false),
+		m_GroundZ (0.0F),
 		m_ObjectCenter (0.0f, 0.0f, 0.0f)
 {
     // Get the windowed mode from the registry
@@ -1132,6 +1294,15 @@ CGraphicView::RepaintView
 		//
 		if (doc->GetBackgroundObjectName ().GetLength () > 0) {
 			WW3D::Render (doc->GetBackObjectScene (), doc->GetBackObjectCamera (), FALSE, FALSE);
+		}
+
+		//
+		// TheSuperHackers @feature Tria Ground plane under the displayed object
+		// (Ground menu). Drawn before the scene so its depth is in place; see
+		// Render_Ground for the ordering rationale.
+		//
+		if (m_bShowGround) {
+			Render_Ground (m_pCamera, doc->GetDisplayedObject (), m_ViewedSphere, m_GroundZ);
 		}
 
 		//

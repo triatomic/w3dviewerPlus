@@ -77,6 +77,8 @@ CMaterialPreviewPane::CMaterialPreviewPane()
 	  m_bRMouseDown(FALSE),
 	  m_bMMouseDown(FALSE),
 	  m_AltOnMDown(false),
+	  m_GroundVisible(false),
+	  m_GroundZ(0.0F),
 	  m_SizeDirty(false),
 	  m_LastRenderTicks(0)
 {
@@ -298,10 +300,37 @@ CMaterialPreviewPane::LoadModel(const char *name)
 	SphereClass sphere = render_obj->Get_Bounding_Sphere();
 	if (!same_model) {
 		Reset_Camera_To_Sphere(sphere);
+		// Ground default: sit at the new object's bounding-box bottom. A reload
+		// of the same model (post-save refresh) keeps the user's height.
+		const AABoxClass &box = render_obj->Get_Bounding_Box();
+		m_GroundZ = box.Center.Z - box.Extent.Z;
 	} else {
 		m_ViewedSphere = sphere;
 	}
 	m_LoadedName = name;
+	return true;
+}
+
+// Slider bounds: one full span (twice the object's half-height, floored at the
+// bounding-sphere radius) either side of the bounding-box bottom, so the
+// default height lands exactly mid-slider.
+bool
+CMaterialPreviewPane::Get_Ground_Z_Range(float &z_min, float &z_max) const
+{
+	if (m_RenderObj == nullptr) {
+		return false;
+	}
+	const AABoxClass &box = m_RenderObj->Get_Bounding_Box();
+	float bottom = box.Center.Z - box.Extent.Z;
+	float span = box.Extent.Z * 2.0F;
+	if (span < m_ViewedSphere.Radius) {
+		span = m_ViewedSphere.Radius;
+	}
+	if (span < 1.0F) {
+		span = 1.0F;
+	}
+	z_min = bottom - span;
+	z_max = bottom + span;
 	return true;
 }
 
@@ -342,6 +371,57 @@ const char *Bare_Mesh_Name(const char *name)
 bool Mesh_Names_Match(const char *a, const char *b)
 {
 	return _stricmp(Bare_Mesh_Name(a), Bare_Mesh_Name(b)) == 0;
+}
+
+// Live-preview the U/V clamp (texture-address) bits. Clamp is a property of the
+// TextureClass filter, which is set once at load from the W3DTEXTURE_CLAMP_U/V
+// bits and shared (by pointer) with every other mesh using the same texture.
+// Mutating that shared filter in place would flip tiling on unrelated models and
+// leak past the viewer, so instead we make a private copy of the texture: a new
+// TextureClass built from the SAME underlying D3D surface (no re-decode, just an
+// AddRef) but with its own filter. We copy the current filter, override only the
+// address mode from the edited attributes, and swap the copy into this one pass/
+// stage. Returns true if the texture pointer was replaced (so the caller can
+// re-register the mesh's render category, which is keyed by texture+shader).
+//
+// Only the address mode is live-previewable this way. The other W3DTEXTURE_* bits
+// (No-LOD/mip count, alpha-bitmap, hint) change how the texture is DECODED at
+// load, so they can't be applied without a reload and stay save-only.
+bool Apply_Clamp_To_Texture_Stage(MeshModelClass *model, int pass, int stage,
+	const W3dMaterialViewer::TextureData &tex_data)
+{
+	TextureClass *live = model->Peek_Single_Texture(pass, stage);
+	if (live == nullptr) {
+		return false;
+	}
+
+	const bool want_u_clamp = (tex_data.attributes & W3DTEXTURE_CLAMP_U) != 0;
+	const bool want_v_clamp = (tex_data.attributes & W3DTEXTURE_CLAMP_V) != 0;
+	const bool have_u_clamp =
+		live->Get_Filter().Get_U_Addr_Mode() == TextureFilterClass::TEXTURE_ADDRESS_CLAMP;
+	const bool have_v_clamp =
+		live->Get_Filter().Get_V_Addr_Mode() == TextureFilterClass::TEXTURE_ADDRESS_CLAMP;
+	if (want_u_clamp == have_u_clamp && want_v_clamp == have_v_clamp) {
+		return false;	// nothing to change; keep the shared texture as-is
+	}
+
+	IDirect3DBaseTexture8 *d3d = live->Peek_D3D_Base_Texture();
+	if (d3d == nullptr) {
+		return false;	// surface not resident yet (async load) — retried next edit
+	}
+
+	// New object over the shared surface. The ctor AddRefs the D3D texture, so it
+	// owns an independent ref and outlives the original.
+	TextureClass *edit = new TextureClass(d3d);
+	edit->Get_Filter() = live->Get_Filter();	// inherit filter/mip settings, then...
+	edit->Get_Filter().Set_U_Addr_Mode(want_u_clamp
+		? TextureFilterClass::TEXTURE_ADDRESS_CLAMP : TextureFilterClass::TEXTURE_ADDRESS_REPEAT);
+	edit->Get_Filter().Set_V_Addr_Mode(want_v_clamp
+		? TextureFilterClass::TEXTURE_ADDRESS_CLAMP : TextureFilterClass::TEXTURE_ADDRESS_REPEAT);
+
+	model->Set_Single_Texture(edit, pass, stage);	// takes its own ref
+	edit->Release_Ref();
+	return true;
 }
 
 // Stamp one mesh's edited vertex materials + shaders onto the live model. The
@@ -422,6 +502,16 @@ void Apply_Mesh_Materials(MeshClass *mesh, const W3dMaterialViewer::MeshMaterial
 			// exposes only the post-detail fields); they still save to the file.
 			model->Set_Single_Shader(shader, pass);
 			shader_changed = true;
+		}
+
+		// --- Texture: U/V clamp (address) mode, per stage ---
+		for (int stage = 0; stage < 2; stage++) {
+			int ti = pass_data.stageTextureIndex[stage];
+			if (ti >= 0 && ti < (int)data.textures.size()) {
+				if (Apply_Clamp_To_Texture_Stage(model, pass, stage, data.textures[ti])) {
+					shader_changed = true;	// texture swap re-buckets the render category
+				}
+			}
 		}
 	}
 
@@ -611,6 +701,18 @@ CMaterialPreviewPane::Render_Highlight_Outline()
 	dev->SetVertexShader(D3DFVF_XYZ | D3DFVF_DIFFUSE);
 	dev->DrawPrimitiveUP(D3DPT_LINELIST, 12, verts, sizeof(OutlineVertex));
 	DX8Wrapper::Invalidate_Cached_Render_States();
+}
+
+// Draws the ground plane + blob shadow; the drawing itself is shared with the
+// main viewport (CGraphicView::Render_Ground, Ground menu), which documents the
+// draw-before-the-scene ordering that makes glow land on the plane.
+void
+CMaterialPreviewPane::Render_Ground_Plane()
+{
+	if (!m_GroundVisible || m_Camera == nullptr) {
+		return;
+	}
+	CGraphicView::Render_Ground(m_Camera, m_RenderObj, m_ViewedSphere, m_GroundZ);
 }
 
 // Adds/removes the light gizmo mesh so it is visible exactly while Ctrl is
@@ -988,6 +1090,10 @@ CMaterialPreviewPane::Render()
 	}
 
 	WW3D::Begin_Render(true, true, Vector3(bg, bg, bg));
+
+	// Ground first (see Render_Ground_Plane for why it precedes the scene).
+	Render_Ground_Plane();
+
 	WW3D::Render(m_Scene, m_Camera, FALSE, FALSE);
 
 	// TheSuperHackers @feature Tria Second pass: tint the normally-culled back faces,

@@ -206,6 +206,27 @@ protected:
 		  static COLORREF		Tint_Color_To_ColorRef (const Vector3 &c);
 		  static Vector3		ColorRef_To_Tint_Color (COLORREF c);
 
+		  // TheSuperHackers @feature Tria Ground plane (Ground menu): a checkered
+		  // plane with a blob shadow under the displayed object. State is per view
+		  // (the Material Viewer preview keeps its own); only the draw is shared.
+		  void					Set_Show_Ground (bool onoff);
+		  bool					Is_Show_Ground (void) const					{ return m_bShowGround; }
+		  void					Set_Ground_Z (float z)							{ m_GroundZ = z; }
+		  float					Get_Ground_Z (void) const						{ return m_GroundZ; }
+		  // Height bounds for Ground > Height... (bounding-box bottom +/- one
+		  // span, so the default sits mid-slider); false while nothing is shown.
+		  bool					Get_Ground_Z_Range (float &z_min, float &z_max) const;
+		  // Snaps the plane back under the displayed object's bounding box.
+		  void					Reset_Ground_To_Object (void);
+
+		  // Draws the checkered plane + blob shadow for `obj` at height ground_z
+		  // through `camera` (`sphere` sizes the plane when obj is null). Must run
+		  // inside the render bracket BEFORE the scene render: the plane writes
+		  // depth first, so opaque geometry occludes it and WW3D's later sorted
+		  // translucent flush blends the object's glow over it. Shared by the main
+		  // viewport and the Material Viewer preview.
+		  static void			Render_Ground (CameraClass *camera, RenderObjClass *obj, const SphereClass &sphere, float ground_z);
+
         //
         // Object rotation methods
         //
@@ -290,6 +311,11 @@ protected:
 		  OBJECT_ROTATION		m_LightRotation;
         CAMERA_ROTATION		m_allowedCameraRotation;
         bool					m_InvertCameraY;
+
+        // Ground plane (Ground menu); height defaults to the displayed object's
+        // bounding-box bottom whenever the toggle turns on.
+        bool					m_bShowGround;
+        float					m_GroundZ;
 
         static bool				s_ShowBackfaceTint;
         static Vector3			s_BackfaceTintColor;

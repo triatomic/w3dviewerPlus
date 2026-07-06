@@ -88,6 +88,9 @@ set(W3DVIEW_SRC
     "Globals.h"
     "GraphicView.cpp"
     "GraphicView.h"
+    # TheSuperHackers @feature Ground menu height dialog.
+    "GroundHeightDialog.cpp"
+    "GroundHeightDialog.h"
     "HierarchyPropPage.cpp"
     "HierarchyPropPage.h"
     # TheSuperHackers @feature W3DView job system (background worker pool).

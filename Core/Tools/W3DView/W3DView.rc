@@ -414,6 +414,13 @@ BEGIN
         MENUITEM SEPARATOR
         MENUITEM "Fog (CTRL+ALT+F)",            IDM_BACKGROUND_FOG
     END
+    POPUP "&Ground"
+    BEGIN
+        MENUITEM "&Show Ground Plane",          IDM_GROUND_SHOW
+        MENUITEM SEPARATOR
+        MENUITEM "&Height...",                  IDM_GROUND_HEIGHT
+        MENUITEM "&Reset Height",               IDM_GROUND_RESET
+    END
     POPUP "&Movie"
     BEGIN
         MENUITEM "&Make Movie...",              IDM_MAKE_MOVIE
@@ -446,6 +453,7 @@ BEGIN
     POPUP "&View"
     BEGIN
         MENUITEM "Show &Full Object",           IDM_MATVIEWER_SHOW_FULL
+        MENUITEM "Show &Ground Plane",          IDM_MATVIEWER_GROUND
         MENUITEM SEPARATOR
         POPUP "W3D &Shaders"
         BEGIN
@@ -697,6 +705,20 @@ BEGIN
     LTEXT           "Static",IDC_SUBOBJECTS,53,55,27,8
     LTEXT           "Static",IDC_TOTAL_VERTICES,65,69,31,8
     LTEXT           "Static",IDC_TOTAL_TRIANGLES,65,83,31,8
+END
+
+// TheSuperHackers @feature Tria Ground > Height... live slider dialog.
+IDD_GROUND_HEIGHT DIALOG DISCARDABLE  0, 0, 186, 60
+STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Ground Height"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT           "Drag to move the ground plane up or down.",IDC_STATIC,
+                    7,7,172,10
+    CONTROL         "Slider1",IDC_GROUND_HEIGHT_SLIDER,"msctls_trackbar32",
+                    TBS_BOTH | TBS_NOTICKS | WS_TABSTOP,7,21,172,14
+    DEFPUSHBUTTON   "OK",IDOK,37,39,50,14
+    PUSHBUTTON      "Cancel",IDCANCEL,99,39,50,14
 END
 
 IDD_DISPLAYSPEED DIALOG DISCARDABLE  0, 0, 186, 108

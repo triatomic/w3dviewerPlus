@@ -50,6 +50,7 @@
 #include "part_ldr.h"
 #include "agg_def.h"
 #include "BoneMgrDialog.h"
+#include "GroundHeightDialog.h"
 #include "Utils.h"
 #include "LogDialog.h"
 #include "light.h"
@@ -373,6 +374,12 @@ BEGIN_MESSAGE_MAP(CMainFrame, CFrameWnd)
 	ON_COMMAND(IDM_SHADER_BACKFACE_TINT, OnShaderBackfaceTint)
 	ON_UPDATE_COMMAND_UI(IDM_SHADER_BACKFACE_TINT, OnUpdateShaderBackfaceTint)
 	ON_COMMAND(IDM_SHADER_BACKFACE_TINT_COLOR, OnShaderBackfaceTintColor)
+	ON_COMMAND(IDM_GROUND_SHOW, OnGroundShow)
+	ON_UPDATE_COMMAND_UI(IDM_GROUND_SHOW, OnUpdateGroundShow)
+	ON_COMMAND(IDM_GROUND_HEIGHT, OnGroundHeight)
+	ON_UPDATE_COMMAND_UI(IDM_GROUND_HEIGHT, OnUpdateGroundHeight)
+	ON_COMMAND(IDM_GROUND_RESET, OnGroundReset)
+	ON_UPDATE_COMMAND_UI(IDM_GROUND_RESET, OnUpdateGroundReset)
 	ON_COMMAND(IDM_SHOW_SUBOBJ_NAMES, OnShowSubObjNames)
 	ON_UPDATE_COMMAND_UI(IDM_SHOW_SUBOBJ_NAMES, OnUpdateShowSubObjNames)
 	ON_COMMAND(IDM_SHOW_BONE_NAMES, OnShowBoneNames)
@@ -5517,6 +5524,51 @@ void CMainFrame::OnShaderBackfaceTintColor()
 	if (ok) {
 		CGraphicView::Set_Backface_Tint_Color(CGraphicView::ColorRef_To_Tint_Color(chosen));
 	}
+}
+
+// TheSuperHackers @feature Tria Ground menu: checkered ground plane with a blob
+// shadow under the displayed object (same drawing the Material Viewer preview
+// uses). Height... opens a live slider dialog; Reset re-snaps the plane to the
+// object's bounding-box bottom.
+void CMainFrame::OnGroundShow()
+{
+	CGraphicView *view = ::Get_Graphic_View();
+	if (view != nullptr) {
+		view->Set_Show_Ground(!view->Is_Show_Ground());
+	}
+}
+
+void CMainFrame::OnUpdateGroundShow(CCmdUI *pCmdUI)
+{
+	CGraphicView *view = ::Get_Graphic_View();
+	pCmdUI->Enable(view != nullptr);
+	pCmdUI->SetCheck((view != nullptr && view->Is_Show_Ground()) ? 1 : 0);
+}
+
+void CMainFrame::OnGroundHeight()
+{
+	CGroundHeightDialog dialog(this);
+	dialog.DoModal();
+}
+
+void CMainFrame::OnUpdateGroundHeight(CCmdUI *pCmdUI)
+{
+	CGraphicView *view = ::Get_Graphic_View();
+	pCmdUI->Enable(view != nullptr && view->Is_Show_Ground());
+}
+
+void CMainFrame::OnGroundReset()
+{
+	CGraphicView *view = ::Get_Graphic_View();
+	if (view != nullptr) {
+		view->Reset_Ground_To_Object();
+	}
+}
+
+void CMainFrame::OnUpdateGroundReset(CCmdUI *pCmdUI)
+{
+	CGraphicView *view = ::Get_Graphic_View();
+	pCmdUI->Enable(view != nullptr && view->Is_Show_Ground());
 }
 
 void CMainFrame::OnShowSubObjNames()

@@ -44,6 +44,12 @@ namespace
 {
 	const int PREVIEW_ID = 1;
 	const int PLACEHOLDER_ID = 2;
+	const int GROUND_SLIDER_ID = 3;
+
+	// Ground-height slider: strip width left of the preview, and tick count
+	// (position resolution) across the pane's z range.
+	const int GROUND_SLIDER_WIDTH = 26;
+	const int GROUND_SLIDER_STEPS = 1000;
 
 	// Debounce timer for the live material preview: coalesce a burst of edits
 	// (dragging a spin box, typing) into a single in-memory apply.
@@ -206,6 +212,9 @@ BEGIN_MESSAGE_MAP(CMaterialViewerFrame, CFrameWnd)
 	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_LIGHT_FREEROAM, OnUpdateLightFreeRoam)
 	ON_COMMAND(IDM_MATVIEWER_LIGHT_PERFACE, OnLightPerFace)
 	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_LIGHT_PERFACE, OnUpdateLightPerFace)
+	ON_COMMAND(IDM_MATVIEWER_GROUND, OnShowGround)
+	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_GROUND, OnUpdateShowGround)
+	ON_WM_VSCROLL()
 	ON_WM_DROPFILES()
 	ON_MESSAGE(WM_MATVIEWER_TAB_ACTION, OnTabAction)
 	ON_MESSAGE(WM_W3DVIEW_THEME_CHANGED, OnThemeChanged)
@@ -320,6 +329,64 @@ void CMaterialViewerFrame::OnUpdateLightPerFace(CCmdUI *cmd_ui)
 {
 	cmd_ui->SetCheck((m_Preview != nullptr
 		&& m_Preview->Get_Light_Placement_Mode() == CMaterialPreviewPane::LIGHT_PER_FACE) ? 1 : 0);
+}
+
+// TheSuperHackers @feature Tria Ground plane: a simple checkered ground with a
+// blob shadow under the object, drawn by the preview pane below the model. The
+// vertical slider on the preview's left edge moves the plane's height and
+// appears together with the toggle.
+void CMaterialViewerFrame::OnShowGround()
+{
+	if (m_Preview == nullptr) {
+		return;
+	}
+	m_Preview->Set_Ground_Visible(!m_Preview->Is_Ground_Visible());
+	SyncGroundSlider();
+	ReassertLayout();
+}
+
+void CMaterialViewerFrame::OnUpdateShowGround(CCmdUI *cmd_ui)
+{
+	cmd_ui->SetCheck((m_Preview != nullptr && m_Preview->Is_Ground_Visible()) ? 1 : 0);
+}
+
+// Maps the slider (top = high) onto the pane's ground-height range. Trackbars
+// report every notch through WM_VSCROLL; GetPos is live during a thumb drag.
+void CMaterialViewerFrame::OnVScroll(UINT sb_code, UINT pos, CScrollBar *scrollbar)
+{
+	if (scrollbar != nullptr && m_Preview != nullptr
+			&& scrollbar->GetSafeHwnd() == m_GroundSlider.GetSafeHwnd()) {
+		float z_min = 0.0F, z_max = 0.0F;
+		if (m_Preview->Get_Ground_Z_Range(z_min, z_max)) {
+			float frac = (float)m_GroundSlider.GetPos() / (float)GROUND_SLIDER_STEPS;
+			m_Preview->Set_Ground_Z(z_max - frac * (z_max - z_min));
+		}
+		return;
+	}
+	CFrameWnd::OnVScroll(sb_code, pos, scrollbar);
+}
+
+void CMaterialViewerFrame::SyncGroundSlider()
+{
+	if (m_Preview == nullptr || !::IsWindow(m_GroundSlider.m_hWnd)) {
+		return;
+	}
+	float z_min = 0.0F, z_max = 0.0F;
+	if (!m_Preview->Get_Ground_Z_Range(z_min, z_max) || z_max <= z_min) {
+		m_GroundSlider.SetPos(GROUND_SLIDER_STEPS / 2);
+		return;
+	}
+	// Clamp the pane's height into the new range so thumb and plane agree.
+	float z = m_Preview->Get_Ground_Z();
+	if (z < z_min) {
+		z = z_min;
+	}
+	if (z > z_max) {
+		z = z_max;
+	}
+	m_Preview->Set_Ground_Z(z);
+	float frac = (z_max - z) / (z_max - z_min);
+	m_GroundSlider.SetPos((int)(frac * GROUND_SLIDER_STEPS + 0.5F));
 }
 
 // TheSuperHackers @feature Tria Pick the back-face tint colour via the Qt colour
@@ -546,6 +613,14 @@ CMaterialViewerFrame::OnCreate(LPCREATESTRUCT create_struct)
 
 	m_Preview = new CMaterialPreviewPane;
 	m_Preview->Create(this, CRect(0, 0, 10, 10), PREVIEW_ID);
+
+	// Ground-height slider: thin vertical strip left of the preview, shown only
+	// while View > Show Ground Plane is on (Layout reserves its width).
+	m_GroundSlider.Create(WS_CHILD | TBS_VERT | TBS_BOTH | TBS_NOTICKS,
+		CRect(0, 0, 10, 10), this, GROUND_SLIDER_ID);
+	m_GroundSlider.SetRange(0, GROUND_SLIDER_STEPS);
+	m_GroundSlider.SetPos(GROUND_SLIDER_STEPS / 2);
+
 	m_Preview->Set_Light_Placement_Mode(
 		::AfxGetApp()->GetProfileInt("Config", "MatViewerLightPerFace", 1) != 0
 			? CMaterialPreviewPane::LIGHT_PER_FACE
@@ -718,8 +793,21 @@ CMaterialViewerFrame::Layout(int cx, int cy)
 	int body_height = cy - tab_height;
 	int preview_width = (int)(cx * PREVIEW_WIDTH_RATIO);
 
+	// Ground-height slider strip on the preview's left, only while the ground
+	// plane is shown; the preview shrinks by the strip's width.
+	int slider_width = (m_Preview != nullptr && m_Preview->Is_Ground_Visible())
+		? GROUND_SLIDER_WIDTH : 0;
+	if (::IsWindow(m_GroundSlider.m_hWnd)) {
+		if (slider_width > 0) {
+			m_GroundSlider.MoveWindow(0, tab_height, slider_width, body_height);
+			m_GroundSlider.ShowWindow(SW_SHOW);
+		} else {
+			m_GroundSlider.ShowWindow(SW_HIDE);
+		}
+	}
+
 	if ((m_Preview != nullptr) && ::IsWindow(m_Preview->m_hWnd)) {
-		m_Preview->MoveWindow(0, tab_height, preview_width, body_height);
+		m_Preview->MoveWindow(slider_width, tab_height, preview_width - slider_width, body_height);
 	}
 
 	if (m_PanelWnd != nullptr) {
@@ -1174,6 +1262,9 @@ CMaterialViewerFrame::UpdatePreviewModel()
 	// which part of the object the panel is editing.
 	m_Preview->Set_Highlight_Mesh((tab.showFullObject && !tab.currentMeshName.empty())
 		? tab.currentMeshName.c_str() : nullptr);
+
+	// The model (and so the ground plane's default height/range) may have changed.
+	SyncGroundSlider();
 }
 
 void
