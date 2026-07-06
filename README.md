@@ -1,5 +1,5 @@
 [![Download latest release](https://img.shields.io/github/v/release/triatomic/w3dviewerPlus?include_prereleases&sort=date&display_name=tag&style=for-the-badge&label=Download%20W3DView%2B&color=2ea44f)](https://github.com/triatomic/w3dviewerPlus/releases/latest)
-[![Latest release](https://img.shields.io/github/release-date/triatomic/w3dviewerPlus?style=flat&label=Released)](https://github.com/triatomic/w3dviewerPlus/releases/latest)
+[![Latest release](https://img.shields.io/github/release-date/triatomic/w3dviewerPlus?style=for-the-badge&label=Released)](https://github.com/triatomic/w3dviewerPlus/releases/latest)
 
 # W3DView+
 
