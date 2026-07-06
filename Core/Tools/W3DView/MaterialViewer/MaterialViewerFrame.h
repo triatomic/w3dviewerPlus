@@ -133,7 +133,8 @@ protected:
 	afx_msg void OnUpdateLightPerFace(CCmdUI *cmd_ui);
 	afx_msg void OnShowGround();
 	afx_msg void OnUpdateShowGround(CCmdUI *cmd_ui);
-	afx_msg void OnVScroll(UINT sb_code, UINT pos, CScrollBar *scrollbar);
+	afx_msg void OnGroundReset();
+	afx_msg void OnUpdateGroundReset(CCmdUI *cmd_ui);
 	afx_msg void OnDropFiles(HDROP drop);
 	afx_msg LRESULT OnThemeChanged(WPARAM wparam, LPARAM lparam);
 	DECLARE_MESSAGE_MAP()
@@ -158,6 +159,11 @@ private:
 	// (called when the toggle turns on and after every model change, which
 	// re-derives the slider's range from the new bounding box).
 	void SyncGroundSlider();
+
+	// Qt ground-slider value change (user drag); maps position onto the pane's
+	// height range. The thunk is handed to the Qt bridge.
+	void OnGroundSliderChanged(int pos);
+	static void GroundSliderChangedThunk(int pos);
 	void OnPanelMeshSelected(const char *meshName);
 	static void PanelMeshSelectedThunk(const char *meshName);
 
@@ -236,9 +242,9 @@ private:
 
 	CMaterialPreviewPane	*m_Preview;
 	CStatic					m_PlaceholderText;	// shown where the Qt panel would be
-	CSliderCtrl				m_GroundSlider;		// ground height; visible with the toggle
 	HWND					m_PanelWnd;
 	HWND					m_TabBarWnd;		// Qt QTabBar hosted in the frame
+	HWND					m_GroundSliderWnd;	// Qt QSlider for ground height
 
 	std::vector<MaterialViewerTab>	m_Tabs;
 	int						m_ActiveTab;		// index into m_Tabs, -1 when empty

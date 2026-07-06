@@ -453,7 +453,6 @@ BEGIN
     POPUP "&View"
     BEGIN
         MENUITEM "Show &Full Object",           IDM_MATVIEWER_SHOW_FULL
-        MENUITEM "Show &Ground Plane",          IDM_MATVIEWER_GROUND
         MENUITEM SEPARATOR
         POPUP "W3D &Shaders"
         BEGIN
@@ -468,6 +467,12 @@ BEGIN
             MENUITEM "Back Faces Tinted",           IDM_SHADER_BACKFACE_TINT
             MENUITEM "Back Face Tint Color...",     IDM_SHADER_BACKFACE_TINT_COLOR
         END
+    END
+    POPUP "&Ground"
+    BEGIN
+        MENUITEM "&Show Ground Plane",          IDM_MATVIEWER_GROUND
+        MENUITEM SEPARATOR
+        MENUITEM "&Reset Height",               IDM_MATVIEWER_GROUND_RESET
     END
     POPUP "&Light"
     BEGIN
@@ -613,7 +618,7 @@ CAPTION "About W3DView+"
 FONT 8, "MS Shell Dlg"
 BEGIN
     ICON            IDR_MAINFRAME,IDC_STATIC,11,17,20,20
-    LTEXT           "W3DView+ Version 6.1.2",IDC_VERSION,40,10,119,8,
+    LTEXT           "W3DView+ Version 7.0.0",IDC_VERSION,40,10,119,8,
                     SS_NOPREFIX
     LTEXT           "Copyright (C) 1998",IDC_STATIC,40,25,119,8
     LTEXT           "Modified by Tria 2026",IDC_STATIC,40,36,119,8
@@ -2273,8 +2278,8 @@ END
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 6,1,2,0
- PRODUCTVERSION 6,1,2,0
+ FILEVERSION 7,0,0,0
+ PRODUCTVERSION 7,0,0,0
  FILEFLAGSMASK 0x3fL
 #ifdef RTS_DEBUG
  FILEFLAGS 0x1L
@@ -2292,14 +2297,14 @@ BEGIN
             VALUE "Comments", "\0"
             VALUE "CompanyName", "\0"
             VALUE "FileDescription", "W3DView+ MFC Application\0"
-            VALUE "FileVersion", "6.1.2\0"
+            VALUE "FileVersion", "7.0.0\0"
             VALUE "InternalName", "W3DView+\0"
             VALUE "LegalCopyright", "Copyright (C) 1998\0"
             VALUE "LegalTrademarks", "\0"
             VALUE "OriginalFilename", "W3DView.EXE\0"
             VALUE "PrivateBuild", "\0"
             VALUE "ProductName", "W3DView+ Application\0"
-            VALUE "ProductVersion", "6.1.2\0"
+            VALUE "ProductVersion", "7.0.0\0"
             VALUE "SpecialBuild", "\0"
         END
     END

@@ -44,10 +44,9 @@ namespace
 {
 	const int PREVIEW_ID = 1;
 	const int PLACEHOLDER_ID = 2;
-	const int GROUND_SLIDER_ID = 3;
 
-	// Ground-height slider: strip width left of the preview, and tick count
-	// (position resolution) across the pane's z range.
+	// Ground-height slider (Qt QSlider): strip width left of the preview, and
+	// tick count (position resolution) across the pane's z range.
 	const int GROUND_SLIDER_WIDTH = 26;
 	const int GROUND_SLIDER_STEPS = 1000;
 
@@ -214,7 +213,8 @@ BEGIN_MESSAGE_MAP(CMaterialViewerFrame, CFrameWnd)
 	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_LIGHT_PERFACE, OnUpdateLightPerFace)
 	ON_COMMAND(IDM_MATVIEWER_GROUND, OnShowGround)
 	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_GROUND, OnUpdateShowGround)
-	ON_WM_VSCROLL()
+	ON_COMMAND(IDM_MATVIEWER_GROUND_RESET, OnGroundReset)
+	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_GROUND_RESET, OnUpdateGroundReset)
 	ON_WM_DROPFILES()
 	ON_MESSAGE(WM_MATVIEWER_TAB_ACTION, OnTabAction)
 	ON_MESSAGE(WM_W3DVIEW_THEME_CHANGED, OnThemeChanged)
@@ -350,43 +350,64 @@ void CMaterialViewerFrame::OnUpdateShowGround(CCmdUI *cmd_ui)
 	cmd_ui->SetCheck((m_Preview != nullptr && m_Preview->Is_Ground_Visible()) ? 1 : 0);
 }
 
-// Maps the slider (top = high) onto the pane's ground-height range. Trackbars
-// report every notch through WM_VSCROLL; GetPos is live during a thumb drag.
-void CMaterialViewerFrame::OnVScroll(UINT sb_code, UINT pos, CScrollBar *scrollbar)
+void CMaterialViewerFrame::OnGroundReset()
 {
-	if (scrollbar != nullptr && m_Preview != nullptr
-			&& scrollbar->GetSafeHwnd() == m_GroundSlider.GetSafeHwnd()) {
-		float z_min = 0.0F, z_max = 0.0F;
-		if (m_Preview->Get_Ground_Z_Range(z_min, z_max)) {
-			float frac = (float)m_GroundSlider.GetPos() / (float)GROUND_SLIDER_STEPS;
-			m_Preview->Set_Ground_Z(z_max - frac * (z_max - z_min));
-		}
+	if (m_Preview == nullptr) {
 		return;
 	}
-	CFrameWnd::OnVScroll(sb_code, pos, scrollbar);
+	m_Preview->Reset_Ground_To_Object();
+	SyncGroundSlider();
 }
 
+void CMaterialViewerFrame::OnUpdateGroundReset(CCmdUI *cmd_ui)
+{
+	cmd_ui->Enable((m_Preview != nullptr && m_Preview->Is_Ground_Visible()) ? 1 : 0);
+}
+
+// Pushes the pane's current ground height onto the Qt slider (clamped into the
+// current object's range so thumb and plane agree). Called when the toggle
+// turns on and after every model change (which re-derives the range).
+// Pushes the pane's current ground height onto the Qt slider (clamped into the
+// current object's range so thumb and plane agree). Called when the toggle
+// turns on and after every model change (which re-derives the range).
 void CMaterialViewerFrame::SyncGroundSlider()
 {
-	if (m_Preview == nullptr || !::IsWindow(m_GroundSlider.m_hWnd)) {
+#ifdef W3DVIEW_HAS_QT
+	if (m_Preview == nullptr || m_GroundSliderWnd == nullptr) {
+		return;
+	}
+
+	int pos = GROUND_SLIDER_STEPS / 2;
+	float z_min = 0.0F, z_max = 0.0F;
+	if (m_Preview->Get_Ground_Z_Range(z_min, z_max) && z_max > z_min) {
+		float z = m_Preview->Get_Ground_Z();
+		z = (z < z_min) ? z_min : (z > z_max) ? z_max : z;
+		m_Preview->Set_Ground_Z(z);
+		pos = (int)((z_max - z) / (z_max - z_min) * GROUND_SLIDER_STEPS + 0.5F);
+	}
+	W3dMaterialViewer::SetGroundSliderPos(pos);
+#endif
+}
+
+// User moved the Qt height slider: map its position (top = high) onto the
+// pane's range. Fires synchronously on the UI thread from the Qt bridge.
+void CMaterialViewerFrame::OnGroundSliderChanged(int pos)
+{
+	if (m_Preview == nullptr) {
 		return;
 	}
 	float z_min = 0.0F, z_max = 0.0F;
-	if (!m_Preview->Get_Ground_Z_Range(z_min, z_max) || z_max <= z_min) {
-		m_GroundSlider.SetPos(GROUND_SLIDER_STEPS / 2);
-		return;
+	if (m_Preview->Get_Ground_Z_Range(z_min, z_max)) {
+		float frac = (float)pos / (float)GROUND_SLIDER_STEPS;
+		m_Preview->Set_Ground_Z(z_max - frac * (z_max - z_min));
 	}
-	// Clamp the pane's height into the new range so thumb and plane agree.
-	float z = m_Preview->Get_Ground_Z();
-	if (z < z_min) {
-		z = z_min;
+}
+
+void CMaterialViewerFrame::GroundSliderChangedThunk(int pos)
+{
+	if (_TheInstance != nullptr) {
+		_TheInstance->OnGroundSliderChanged(pos);
 	}
-	if (z > z_max) {
-		z = z_max;
-	}
-	m_Preview->Set_Ground_Z(z);
-	float frac = (z_max - z) / (z_max - z_min);
-	m_GroundSlider.SetPos((int)(frac * GROUND_SLIDER_STEPS + 0.5F));
 }
 
 // TheSuperHackers @feature Tria Pick the back-face tint colour via the Qt colour
@@ -406,6 +427,7 @@ CMaterialViewerFrame::CMaterialViewerFrame()
 	: m_Preview(nullptr),
 	  m_PanelWnd(nullptr),
 	  m_TabBarWnd(nullptr),
+	  m_GroundSliderWnd(nullptr),
 	  m_ActiveTab(-1),
 	  m_LivePreviewPending(false)
 {
@@ -614,13 +636,6 @@ CMaterialViewerFrame::OnCreate(LPCREATESTRUCT create_struct)
 	m_Preview = new CMaterialPreviewPane;
 	m_Preview->Create(this, CRect(0, 0, 10, 10), PREVIEW_ID);
 
-	// Ground-height slider: thin vertical strip left of the preview, shown only
-	// while View > Show Ground Plane is on (Layout reserves its width).
-	m_GroundSlider.Create(WS_CHILD | TBS_VERT | TBS_BOTH | TBS_NOTICKS,
-		CRect(0, 0, 10, 10), this, GROUND_SLIDER_ID);
-	m_GroundSlider.SetRange(0, GROUND_SLIDER_STEPS);
-	m_GroundSlider.SetPos(GROUND_SLIDER_STEPS / 2);
-
 	m_Preview->Set_Light_Placement_Mode(
 		::AfxGetApp()->GetProfileInt("Config", "MatViewerLightPerFace", 1) != 0
 			? CMaterialPreviewPane::LIGHT_PER_FACE
@@ -634,6 +649,16 @@ CMaterialViewerFrame::OnCreate(LPCREATESTRUCT create_struct)
 		W3dMaterialViewer::SetTabBarCloseRequestedCallback(&CMaterialViewerFrame::TabCloseRequestedThunk);
 		::ShowWindow(m_TabBarWnd, SW_HIDE);	// shown once the first tab opens
 	}
+	// Ground-height slider: a Qt QSlider so it follows the panel's dark theme
+	// (the Win32 trackbar has no dark mode). Thin vertical strip left of the
+	// preview, shown only while Ground > Show Ground Plane is on.
+	m_GroundSliderWnd = W3dMaterialViewer::CreateGroundSlider(m_hWnd, GROUND_SLIDER_STEPS);
+	if (m_GroundSliderWnd != nullptr) {
+		W3dMaterialViewer::SetGroundSliderChangedCallback(&CMaterialViewerFrame::GroundSliderChangedThunk);
+		W3dMaterialViewer::SetGroundSliderPos(GROUND_SLIDER_STEPS / 2);
+		::ShowWindow(m_GroundSliderWnd, SW_HIDE);	// shown with the toggle
+	}
+
 	W3dMaterialViewer::SetPanelMeshSelectedCallback(&CMaterialViewerFrame::PanelMeshSelectedThunk);
 	W3dMaterialViewer::SetPanelEditGateCallback(&CMaterialViewerFrame::EditGateThunk);
 	W3dMaterialViewer::SetPanelSaveCallback(&CMaterialViewerFrame::SaveThunk);
@@ -706,6 +731,11 @@ CMaterialViewerFrame::OnDestroy()
 		W3dMaterialViewer::SetTabBarCloseRequestedCallback(nullptr);
 		W3dMaterialViewer::DestroyTabBar();
 		m_TabBarWnd = nullptr;
+	}
+	if (m_GroundSliderWnd != nullptr) {
+		W3dMaterialViewer::SetGroundSliderChangedCallback(nullptr);
+		W3dMaterialViewer::DestroyGroundSlider();
+		m_GroundSliderWnd = nullptr;
 	}
 	if (m_PanelWnd != nullptr) {
 		W3dMaterialViewer::DestroyPanel();
@@ -793,18 +823,24 @@ CMaterialViewerFrame::Layout(int cx, int cy)
 	int body_height = cy - tab_height;
 	int preview_width = (int)(cx * PREVIEW_WIDTH_RATIO);
 
-	// Ground-height slider strip on the preview's left, only while the ground
-	// plane is shown; the preview shrinks by the strip's width.
-	int slider_width = (m_Preview != nullptr && m_Preview->Is_Ground_Visible())
-		? GROUND_SLIDER_WIDTH : 0;
-	if (::IsWindow(m_GroundSlider.m_hWnd)) {
-		if (slider_width > 0) {
-			m_GroundSlider.MoveWindow(0, tab_height, slider_width, body_height);
-			m_GroundSlider.ShowWindow(SW_SHOW);
+	// Ground-height slider strip (Qt QSlider) on the preview's left, only while
+	// the ground plane is shown; the preview shrinks by the strip's width.
+	int slider_width = 0;
+#ifdef W3DVIEW_HAS_QT
+	if (m_GroundSliderWnd != nullptr) {
+		bool visible = (m_Preview != nullptr && m_Preview->Is_Ground_Visible());
+		slider_width = visible ? GROUND_SLIDER_WIDTH : 0;
+		if (visible) {
+			// Resize through Qt first so its logical geometry matches (same
+			// dance as the panel/tab bar).
+			W3dMaterialViewer::ResizeGroundSlider(slider_width, body_height);
+			::MoveWindow(m_GroundSliderWnd, 0, tab_height, slider_width, body_height, TRUE);
+			::ShowWindow(m_GroundSliderWnd, SW_SHOW);
 		} else {
-			m_GroundSlider.ShowWindow(SW_HIDE);
+			::ShowWindow(m_GroundSliderWnd, SW_HIDE);
 		}
 	}
+#endif
 
 	if ((m_Preview != nullptr) && ::IsWindow(m_Preview->m_hWnd)) {
 		m_Preview->MoveWindow(slider_width, tab_height, preview_width - slider_width, body_height);

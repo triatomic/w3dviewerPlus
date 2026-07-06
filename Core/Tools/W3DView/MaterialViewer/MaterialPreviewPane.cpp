@@ -302,8 +302,7 @@ CMaterialPreviewPane::LoadModel(const char *name)
 		Reset_Camera_To_Sphere(sphere);
 		// Ground default: sit at the new object's bounding-box bottom. A reload
 		// of the same model (post-save refresh) keeps the user's height.
-		const AABoxClass &box = render_obj->Get_Bounding_Box();
-		m_GroundZ = box.Center.Z - box.Extent.Z;
+		m_GroundZ = CGraphicView::Ground_Default_Z(render_obj);
 	} else {
 		m_ViewedSphere = sphere;
 	}
@@ -311,27 +310,22 @@ CMaterialPreviewPane::LoadModel(const char *name)
 	return true;
 }
 
-// Slider bounds: one full span (twice the object's half-height, floored at the
-// bounding-sphere radius) either side of the bounding-box bottom, so the
-// default height lands exactly mid-slider.
+// Height default + slider bounds come from the shared derivation so the preview
+// and the main viewport agree exactly (see CGraphicView).
 bool
 CMaterialPreviewPane::Get_Ground_Z_Range(float &z_min, float &z_max) const
 {
 	if (m_RenderObj == nullptr) {
 		return false;
 	}
-	const AABoxClass &box = m_RenderObj->Get_Bounding_Box();
-	float bottom = box.Center.Z - box.Extent.Z;
-	float span = box.Extent.Z * 2.0F;
-	if (span < m_ViewedSphere.Radius) {
-		span = m_ViewedSphere.Radius;
-	}
-	if (span < 1.0F) {
-		span = 1.0F;
-	}
-	z_min = bottom - span;
-	z_max = bottom + span;
+	CGraphicView::Ground_Z_Range(m_RenderObj, z_min, z_max);
 	return true;
+}
+
+void
+CMaterialPreviewPane::Reset_Ground_To_Object()
+{
+	m_GroundZ = CGraphicView::Ground_Default_Z(m_RenderObj);
 }
 
 void
@@ -709,10 +703,11 @@ CMaterialPreviewPane::Render_Highlight_Outline()
 void
 CMaterialPreviewPane::Render_Ground_Plane()
 {
-	if (!m_GroundVisible || m_Camera == nullptr) {
+	if (!m_GroundVisible || m_Camera == nullptr || m_Scene == nullptr) {
 		return;
 	}
-	CGraphicView::Render_Ground(m_Camera, m_RenderObj, m_ViewedSphere, m_GroundZ);
+	CGraphicView::Render_Ground(m_Camera, m_RenderObj, m_ViewedSphere, m_GroundZ,
+		m_Scene->Get_Ambient_Light(), m_Light);
 }
 
 // Adds/removes the light gizmo mesh so it is visible exactly while Ctrl is

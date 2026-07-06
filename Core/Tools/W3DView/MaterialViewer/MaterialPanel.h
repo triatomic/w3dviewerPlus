@@ -157,6 +157,24 @@ void SetTabBarCurrent(int index);
 void SetTabBarChangedCallback(void (*callback)(int index));
 void SetTabBarCloseRequestedCallback(void (*callback)(int index));
 
+//////////////////////////////////////////////////////////////////////////////
+//	Ground-height slider
+//
+// A vertical QSlider hosted as a WS_CHILD of the MFC frame (same reparenting
+// dance as the tab bar), so the ground-height control follows the Qt dark
+// theme instead of the classic Win32 trackbar look. Positions run 0..steps
+// with 0 at the TOP (the host maps top = high).
+
+HWND CreateGroundSlider(HWND parent, int steps);
+void DestroyGroundSlider();
+void ResizeGroundSlider(int width, int height);
+
+// Programmatic thumb move; emits no changed callback.
+void SetGroundSliderPos(int pos);
+
+// Invoked (synchronously, on the UI thread) when the USER moves the slider.
+void SetGroundSliderChangedCallback(void (*callback)(int pos));
+
 void ApplyPanelTheme(const PanelTheme &theme);
 
 // Delivers Qt posted events/timers. Qt's native child windows receive input

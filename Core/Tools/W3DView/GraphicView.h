@@ -220,12 +220,22 @@ protected:
 		  void					Reset_Ground_To_Object (void);
 
 		  // Draws the checkered plane + blob shadow for `obj` at height ground_z
-		  // through `camera` (`sphere` sizes the plane when obj is null). Must run
-		  // inside the render bracket BEFORE the scene render: the plane writes
-		  // depth first, so opaque geometry occludes it and WW3D's later sorted
-		  // translucent flush blends the object's glow over it. Shared by the main
-		  // viewport and the Material Viewer preview.
-		  static void			Render_Ground (CameraClass *camera, RenderObjClass *obj, const SphereClass &sphere, float ground_z);
+		  // through `camera` (`sphere` sizes the plane when obj is null). The
+		  // checker is lit per vertex from the scene's `ambient` plus `light`'s
+		  // diffuse (may be null), so the plane responds to the movable scene
+		  // light. Must run inside the render bracket BEFORE the scene render:
+		  // the plane writes depth first, so opaque geometry occludes it and
+		  // WW3D's later sorted translucent flush blends the object's glow over
+		  // it. Shared by the main viewport and the Material Viewer preview.
+		  static void			Render_Ground (CameraClass *camera, RenderObjClass *obj, const SphereClass &sphere, float ground_z, const Vector3 &ambient, class LightClass *light);
+
+		  // Ground-height derivation shared with the Material Viewer preview (which
+		  // keeps its own plane but wants identical numbers). Default height is the
+		  // object's bounding-box bottom (0 when obj is null); the slider range is
+		  // bottom +/- one span (twice the half-height, floored at the bounding
+		  // radius), so the default lands mid-slider.
+		  static float			Ground_Default_Z (RenderObjClass *obj);
+		  static void			Ground_Z_Range (RenderObjClass *obj, float &z_min, float &z_max);
 
         //
         // Object rotation methods

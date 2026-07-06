@@ -95,6 +95,9 @@ public:
 	// (bottom +/- one span, so the default sits mid-slider); false while no
 	// model is loaded.
 	bool Get_Ground_Z_Range(float &z_min, float &z_max) const;
+	// Snaps the plane back under the loaded object's bounding box (Ground >
+	// Reset Height).
+	void Reset_Ground_To_Object();
 
 	// Save/restore the full orbit-camera state so each Material Viewer tab can
 	// keep its own view. Captures the raw camera transform plus the orbit

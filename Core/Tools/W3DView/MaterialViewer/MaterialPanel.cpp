@@ -68,6 +68,7 @@
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QPushButton>
 #include <QtWidgets/QScrollArea>
+#include <QtWidgets/QSlider>
 #include <QtWidgets/QSpinBox>
 #include <QtWidgets/QStackedWidget>
 #include <QtWidgets/QStyle>
@@ -3139,6 +3140,79 @@ void SetTabBarCurrent(int index)
 	}
 }
 
+//////////////////////////////////////////////////////////////////////////////
+//	Ground-height slider
+
+QSlider *g_GroundSlider = nullptr;
+bool g_GroundSliderUpdating = false;
+void (*g_GroundSliderChangedCallback)(int pos) = nullptr;
+
+HWND CreateGroundSlider(HWND parent, int steps)
+{
+	if (!Ensure_Application()) {
+		return nullptr;
+	}
+
+	if (g_GroundSlider == nullptr) {
+		g_GroundSlider = new QSlider(Qt::Vertical);
+		g_GroundSlider->setRange(0, steps);
+		// Position 0 sits at the TOP, matching the host's "top = high" mapping
+		// (a vertical QSlider otherwise puts its minimum at the bottom).
+		g_GroundSlider->setInvertedAppearance(true);
+		g_GroundSlider->setInvertedControls(true);
+		g_GroundSlider->setFocusPolicy(Qt::NoFocus);
+		g_GroundSlider->setToolTip(QStringLiteral("Ground height"));
+		QObject::connect(g_GroundSlider, &QSlider::valueChanged, [](int pos) {
+			if (!g_GroundSliderUpdating && g_GroundSliderChangedCallback != nullptr) {
+				g_GroundSliderChangedCallback(pos);
+			}
+		});
+	}
+
+	// Same reparenting dance as CreateTabBar.
+	g_GroundSlider->setWindowFlags(g_GroundSlider->windowFlags() | Qt::FramelessWindowHint);
+
+	HWND hwnd = (HWND)g_GroundSlider->winId();
+	::SetParent(hwnd, parent);
+	LONG style = ::GetWindowLong(hwnd, GWL_STYLE);
+	style &= ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME);
+	style |= WS_CHILD;
+	::SetWindowLong(hwnd, GWL_STYLE, style);
+
+	g_GroundSlider->setAttribute(Qt::WA_Resized, true);
+	g_GroundSlider->show();
+	return hwnd;
+}
+
+void DestroyGroundSlider()
+{
+	if (g_GroundSlider != nullptr) {
+		delete g_GroundSlider;
+		g_GroundSlider = nullptr;
+	}
+}
+
+void ResizeGroundSlider(int width, int height)
+{
+	if (g_GroundSlider != nullptr) {
+		g_GroundSlider->resize(width, height);
+	}
+}
+
+void SetGroundSliderPos(int pos)
+{
+	if (g_GroundSlider != nullptr) {
+		g_GroundSliderUpdating = true;
+		g_GroundSlider->setValue(pos);
+		g_GroundSliderUpdating = false;
+	}
+}
+
+void SetGroundSliderChangedCallback(void (*callback)(int pos))
+{
+	g_GroundSliderChangedCallback = callback;
+}
+
 void SetTabBarChangedCallback(void (*callback)(int index))
 {
 	g_TabChangedCallback = callback;
@@ -3296,6 +3370,7 @@ void ShutdownQt()
 {
 	DestroyPanel();
 	DestroyTabBar();
+	DestroyGroundSlider();
 	if (g_Application != nullptr) {
 		delete g_Application;
 		g_Application = nullptr;

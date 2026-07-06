@@ -658,8 +658,9 @@
 // TheSuperHackers @feature Material Viewer light-placement mode (Light menu).
 #define IDM_MATVIEWER_LIGHT_FREEROAM    32963
 #define IDM_MATVIEWER_LIGHT_PERFACE     32964
-// TheSuperHackers @feature Tria Material Viewer ground plane (View menu toggle).
+// TheSuperHackers @feature Tria Material Viewer ground plane (Ground menu).
 #define IDM_MATVIEWER_GROUND            32965
+#define IDM_MATVIEWER_GROUND_RESET      32969
 // TheSuperHackers @feature Tria Main-viewport ground plane (Ground menu).
 #define IDM_GROUND_SHOW                 32966
 #define IDM_GROUND_HEIGHT               32967
@@ -749,7 +750,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_3D_CONTROLS                     1
 #define _APS_NEXT_RESOURCE_VALUE        732
-#define _APS_NEXT_COMMAND_VALUE         32969
+#define _APS_NEXT_COMMAND_VALUE         32970
 #define _APS_NEXT_CONTROL_VALUE         1190
 #define _APS_NEXT_SYMED_VALUE           101
 #endif

@@ -614,7 +614,33 @@ Vector3 CGraphicView::ColorRef_To_Tint_Color (COLORREF c)
 // WW3D's sorted translucent flush afterwards blends the object's alpha/additive
 // "glow" over the ground. Shared by the main viewport and the Material Viewer
 // preview pane.
-void CGraphicView::Render_Ground (CameraClass *camera, RenderObjClass *obj, const SphereClass &sphere, float ground_z)
+// Per-vertex lighting for the ground checker: base albedo modulated by the
+// scene ambient plus the scene light's diffuse. The plane's normal is +Z, so
+// N.L is simply the normalized vertical reach towards the (point) light.
+static DWORD Lit_Ground_Color (const Vector3 &base, float x, float y, float z,
+	const Vector3 &ambient, bool has_light, const Vector3 &light_pos, const Vector3 &light_diffuse)
+{
+	Vector3 intensity = ambient;
+	if (has_light) {
+		Vector3 dir = light_pos - Vector3 (x, y, z);
+		float len = dir.Length ();
+		if (len > 0.001F) {
+			float ndotl = dir.Z / len;
+			if (ndotl > 0.0F) {
+				intensity += light_diffuse * ndotl;
+			}
+		}
+	}
+	int r = (int)(base.X * intensity.X * 255.0F + 0.5F);
+	int g = (int)(base.Y * intensity.Y * 255.0F + 0.5F);
+	int b = (int)(base.Z * intensity.Z * 255.0F + 0.5F);
+	r = (r > 255) ? 255 : r;
+	g = (g > 255) ? 255 : g;
+	b = (b > 255) ? 255 : b;
+	return 0xFF000000 | (r << 16) | (g << 8) | b;
+}
+
+void CGraphicView::Render_Ground (CameraClass *camera, RenderObjClass *obj, const SphereClass &sphere, float ground_z, const Vector3 &ambient, LightClass *light)
 {
 	if (camera == nullptr) {
 		return;
@@ -660,11 +686,20 @@ void CGraphicView::Render_Ground (CameraClass *camera, RenderObjClass *obj, cons
 	struct GroundVertex { float x, y, z; DWORD color; };
 
 	// --- Checker plane: CELLS x CELLS cells over a square of 3x the bounding
-	// radius, two grey tones per theme. ---
-	const int CELLS = 8;
+	// radius. Two albedo tones per theme, lit per vertex by the scene's ambient
+	// + scene light (Gouraud across each cell gives the light a soft pool). ---
+	const int CELLS = 16;
 	const bool dark = W3DDarkMode::IsDark ();
-	const DWORD tone_a = dark ? 0xFF3A3C40 : 0xFF9A9CA0;
-	const DWORD tone_b = dark ? 0xFF2C2E32 : 0xFF808286;
+	const Vector3 base_a = dark ? Vector3 (0.34F, 0.35F, 0.37F) : Vector3 (0.72F, 0.73F, 0.75F);
+	const Vector3 base_b = dark ? Vector3 (0.26F, 0.27F, 0.29F) : Vector3 (0.60F, 0.61F, 0.63F);
+
+	Vector3 light_pos (0, 0, 0);
+	Vector3 light_diffuse (0, 0, 0);
+	const bool has_light = (light != nullptr);
+	if (has_light) {
+		light->Get_Diffuse (&light_diffuse);
+		light_pos = light->Get_Transform ().Get_Translation ();
+	}
 
 	float half = radius * 3.0F;
 	float cell = (half * 2.0F) / CELLS;
@@ -676,10 +711,14 @@ void CGraphicView::Render_Ground (CameraClass *camera, RenderObjClass *obj, cons
 			float y0 = foot_center.Y - half + cy * cell;
 			float x1 = x0 + cell;
 			float y1 = y0 + cell;
-			DWORD color = ((cx ^ cy) & 1) ? tone_a : tone_b;
+			const Vector3 &base = ((cx ^ cy) & 1) ? base_a : base_b;
+			DWORD c00 = Lit_Ground_Color (base, x0, y0, ground_z, ambient, has_light, light_pos, light_diffuse);
+			DWORD c10 = Lit_Ground_Color (base, x1, y0, ground_z, ambient, has_light, light_pos, light_diffuse);
+			DWORD c11 = Lit_Ground_Color (base, x1, y1, ground_z, ambient, has_light, light_pos, light_diffuse);
+			DWORD c01 = Lit_Ground_Color (base, x0, y1, ground_z, ambient, has_light, light_pos, light_diffuse);
 			GroundVertex quad[6] = {
-				{ x0, y0, ground_z, color }, { x1, y0, ground_z, color }, { x1, y1, ground_z, color },
-				{ x0, y0, ground_z, color }, { x1, y1, ground_z, color }, { x0, y1, ground_z, color },
+				{ x0, y0, ground_z, c00 }, { x1, y0, ground_z, c10 }, { x1, y1, ground_z, c11 },
+				{ x0, y0, ground_z, c00 }, { x1, y1, ground_z, c11 }, { x0, y1, ground_z, c01 },
 			};
 			for (int i = 0; i < 6; i++) {
 				plane_verts[v++] = quad[i];
@@ -729,18 +768,9 @@ void CGraphicView::Set_Show_Ground (bool onoff)
 void CGraphicView::Reset_Ground_To_Object (void)
 {
 	CW3DViewDoc *doc = (CW3DViewDoc *)GetDocument ();
-	RenderObjClass *obj = (doc != nullptr) ? doc->GetDisplayedObject () : nullptr;
-	if (obj != nullptr) {
-		const AABoxClass &box = obj->Get_Bounding_Box ();
-		m_GroundZ = box.Center.Z - box.Extent.Z;
-	} else {
-		m_GroundZ = 0.0F;
-	}
+	m_GroundZ = Ground_Default_Z ((doc != nullptr) ? doc->GetDisplayedObject () : nullptr);
 }
 
-// Same recipe as the Material Viewer pane: one full span (twice the half-
-// height, floored at the bounding radius) either side of the bounding-box
-// bottom, so the default height lands exactly mid-slider.
 bool CGraphicView::Get_Ground_Z_Range (float &z_min, float &z_max) const
 {
 	CW3DViewDoc *doc = (CW3DViewDoc *)GetDocument ();
@@ -748,6 +778,25 @@ bool CGraphicView::Get_Ground_Z_Range (float &z_min, float &z_max) const
 	if (obj == nullptr) {
 		return false;
 	}
+	Ground_Z_Range (obj, z_min, z_max);
+	return true;
+}
+
+// Ground height defaults to the object's bounding-box bottom (0 when null).
+float CGraphicView::Ground_Default_Z (RenderObjClass *obj)
+{
+	if (obj == nullptr) {
+		return 0.0F;
+	}
+	const AABoxClass &box = obj->Get_Bounding_Box ();
+	return box.Center.Z - box.Extent.Z;
+}
+
+// Slider range: one full span (twice the half-height, floored at the bounding
+// radius) either side of the bounding-box bottom, so the default lands
+// mid-slider. Callers must ensure obj is non-null.
+void CGraphicView::Ground_Z_Range (RenderObjClass *obj, float &z_min, float &z_max)
+{
 	const AABoxClass &box = obj->Get_Bounding_Box ();
 	float bottom = box.Center.Z - box.Extent.Z;
 	float span = box.Extent.Z * 2.0F;
@@ -760,7 +809,6 @@ bool CGraphicView::Get_Ground_Z_Range (float &z_min, float &z_max) const
 	}
 	z_min = bottom - span;
 	z_max = bottom + span;
-	return true;
 }
 
 
@@ -1302,7 +1350,8 @@ CGraphicView::RepaintView
 		// Render_Ground for the ordering rationale.
 		//
 		if (m_bShowGround) {
-			Render_Ground (m_pCamera, doc->GetDisplayedObject (), m_ViewedSphere, m_GroundZ);
+			Render_Ground (m_pCamera, doc->GetDisplayedObject (), m_ViewedSphere, m_GroundZ,
+				doc->GetScene ()->Get_Ambient_Light (), doc->GetSceneLight ());
 		}
 
 		//
