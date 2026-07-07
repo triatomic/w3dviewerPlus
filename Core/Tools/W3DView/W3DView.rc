@@ -452,7 +452,7 @@ BEGIN
     END
     POPUP "&View"
     BEGIN
-        MENUITEM "Show &Full Object",           IDM_MATVIEWER_SHOW_FULL
+        MENUITEM "Show &Full Object\tShift+F",  IDM_MATVIEWER_SHOW_FULL
         MENUITEM SEPARATOR
         POPUP "W3D &Shaders"
         BEGIN
@@ -470,7 +470,7 @@ BEGIN
     END
     POPUP "&Ground"
     BEGIN
-        MENUITEM "&Show Ground Plane",          IDM_MATVIEWER_GROUND
+        MENUITEM "&Show Ground Plane\tShift+G", IDM_MATVIEWER_GROUND
         MENUITEM SEPARATOR
         MENUITEM "&Reset Height",               IDM_MATVIEWER_GROUND_RESET
     END

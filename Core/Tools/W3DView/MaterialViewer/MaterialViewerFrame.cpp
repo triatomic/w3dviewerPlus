@@ -623,6 +623,27 @@ CMaterialViewerFrame::PreTranslateMessage(MSG *msg)
 #endif
 	}
 
+	// Shift+letter view toggles (Shift+F = Show Full Object, Shift+G = Show
+	// Ground Plane). Handled AFTER the Qt hand-off above so a user typing an
+	// uppercase letter into a panel text field is unaffected — these only fire
+	// when focus is on the frame/preview, not the material panel. Ignore
+	// auto-repeat (bit 30 of lParam) so a held key doesn't flip the toggle
+	// rapidly, and require Shift without Ctrl.
+	if (msg->message == WM_KEYDOWN
+			&& (::GetKeyState(VK_SHIFT) & 0x8000)
+			&& !(::GetKeyState(VK_CONTROL) & 0x8000)
+			&& (msg->lParam & (1 << 30)) == 0) {
+		UINT command = 0;
+		switch (msg->wParam) {
+			case 'F': command = IDM_MATVIEWER_SHOW_FULL; break;
+			case 'G': command = IDM_MATVIEWER_GROUND; break;
+		}
+		if (command != 0) {
+			SendMessage(WM_COMMAND, MAKEWPARAM(command, 0), 0);
+			return TRUE;
+		}
+	}
+
 	return CFrameWnd::PreTranslateMessage(msg);
 }
 
