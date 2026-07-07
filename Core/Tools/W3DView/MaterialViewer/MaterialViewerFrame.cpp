@@ -103,18 +103,40 @@ namespace
 			&& a.passes.size() == b.passes.size();
 	}
 
+	// Records a changed field name into `changes` (deduped, since the same edit
+	// is diffed once per target file). Null skips reporting.
+	void Note_Change(std::vector<std::string> *changes, const char *field)
+	{
+		if (changes == nullptr) {
+			return;
+		}
+		for (const std::string &existing : *changes) {
+			if (existing == field) {
+				return;
+			}
+		}
+		changes->push_back(field);
+	}
+
 	// Applies ONLY the shader fields that differ between `base` and `edited` onto
 	// `dst`. A field the user left alone stays whatever the target file has, so a
-	// mesh in another state file keeps its own unrelated shader settings.
-	// Returns true if any field was changed.
+	// mesh in another state file keeps its own unrelated shader settings. Records
+	// each changed field's friendly name into `changes`. Returns true if any
+	// field was changed.
 	bool Apply_Shader_Deltas(const W3dMaterialViewer::ShaderData &base,
-		const W3dMaterialViewer::ShaderData &edited, W3dMaterialViewer::ShaderData &dst)
+		const W3dMaterialViewer::ShaderData &edited, W3dMaterialViewer::ShaderData &dst,
+		std::vector<std::string> *changes)
 	{
 		bool changed = false;
-		#define DELTA(field) if (edited.field != base.field) { dst.field = edited.field; changed = true; }
-		DELTA(depthCompare) DELTA(depthMask) DELTA(destBlend) DELTA(priGradient)
-		DELTA(secGradient) DELTA(srcBlend) DELTA(texturing) DELTA(detailColorFunc)
-		DELTA(detailAlphaFunc) DELTA(alphaTest) DELTA(postDetailColorFunc) DELTA(postDetailAlphaFunc)
+		#define DELTA(field, label) if (edited.field != base.field) \
+			{ dst.field = edited.field; changed = true; Note_Change(changes, label); }
+		DELTA(depthCompare, "Depth Compare") DELTA(depthMask, "Depth Mask")
+		DELTA(destBlend, "Dest Blend") DELTA(priGradient, "Primary Gradient")
+		DELTA(secGradient, "Secondary Gradient") DELTA(srcBlend, "Src Blend")
+		DELTA(texturing, "Texturing") DELTA(detailColorFunc, "Detail Color Func")
+		DELTA(detailAlphaFunc, "Detail Alpha Func") DELTA(alphaTest, "Alpha Test")
+		DELTA(postDetailColorFunc, "Post-Detail Color Func")
+		DELTA(postDetailAlphaFunc, "Post-Detail Alpha Func")
 		#undef DELTA
 		return changed;
 	}
@@ -123,16 +145,20 @@ namespace
 	// shininess, attributes/mapping, mapper args). The material name is never
 	// touched.
 	bool Apply_VertexMaterial_Deltas(const W3dMaterialViewer::VertexMaterialData &base,
-		const W3dMaterialViewer::VertexMaterialData &edited, W3dMaterialViewer::VertexMaterialData &dst)
+		const W3dMaterialViewer::VertexMaterialData &edited, W3dMaterialViewer::VertexMaterialData &dst,
+		std::vector<std::string> *changes)
 	{
 		bool changed = false;
-		#define DELTA(field) if (edited.field != base.field) { dst.field = edited.field; changed = true; }
-		DELTA(attributes) DELTA(shininess) DELTA(opacity) DELTA(translucency)
-		DELTA(mapperArgs0) DELTA(mapperArgs1)
+		#define DELTA(field, label) if (edited.field != base.field) \
+			{ dst.field = edited.field; changed = true; Note_Change(changes, label); }
+		DELTA(attributes, "Mapping / Attributes") DELTA(shininess, "Shininess")
+		DELTA(opacity, "Opacity") DELTA(translucency, "Translucency")
+		DELTA(mapperArgs0, "Mapper Args (stage 0)") DELTA(mapperArgs1, "Mapper Args (stage 1)")
 		#undef DELTA
-		#define DELTA_RGB(field) if (::memcmp(edited.field, base.field, sizeof(edited.field)) != 0) \
-			{ ::memcpy(dst.field, edited.field, sizeof(dst.field)); changed = true; }
-		DELTA_RGB(ambient) DELTA_RGB(diffuse) DELTA_RGB(specular) DELTA_RGB(emissive)
+		#define DELTA_RGB(field, label) if (::memcmp(edited.field, base.field, sizeof(edited.field)) != 0) \
+			{ ::memcpy(dst.field, edited.field, sizeof(dst.field)); changed = true; Note_Change(changes, label); }
+		DELTA_RGB(ambient, "Ambient Color") DELTA_RGB(diffuse, "Diffuse Color")
+		DELTA_RGB(specular, "Specular Color") DELTA_RGB(emissive, "Emissive Color")
 		#undef DELTA_RGB
 		return changed;
 	}
@@ -141,11 +167,14 @@ namespace
 	// bits, anim type, frame count/rate). The texture *name* (which file the mesh
 	// points at) is never touched, so each state variant keeps its own textures.
 	bool Apply_Texture_Deltas(const W3dMaterialViewer::TextureData &base,
-		const W3dMaterialViewer::TextureData &edited, W3dMaterialViewer::TextureData &dst)
+		const W3dMaterialViewer::TextureData &edited, W3dMaterialViewer::TextureData &dst,
+		std::vector<std::string> *changes)
 	{
 		bool changed = false;
-		#define DELTA(field) if (edited.field != base.field) { dst.field = edited.field; changed = true; }
-		DELTA(attributes) DELTA(animType) DELTA(frameCount) DELTA(frameRate)
+		#define DELTA(field, label) if (edited.field != base.field) \
+			{ dst.field = edited.field; changed = true; Note_Change(changes, label); }
+		DELTA(attributes, "Texture Settings (clamp / hint / LOD)") DELTA(animType, "Anim Type")
+		DELTA(frameCount, "Frame Count") DELTA(frameRate, "Frame Rate")
 		#undef DELTA
 		// Ensure a texture-info chunk exists to hold any changed settings.
 		if (changed && edited.hasInfo) {
@@ -156,27 +185,29 @@ namespace
 
 	// Applies the user's edits (baseline vs edited) onto one structurally-matching
 	// target mesh, field by field, leaving unchanged fields as the target had
-	// them. Returns true if anything was applied. Requires all three meshes to be
-	// structurally compatible (same pass/material/shader/texture counts) — the
-	// baseline and edited always are (same file); the target is checked by the
-	// caller via Mesh_Structures_Compatible.
+	// them, and records the changed field names in `changes`. Returns true if
+	// anything was applied. Requires all three meshes to be structurally
+	// compatible (same pass/material/shader/texture counts) — the baseline and
+	// edited always are (same file); the target is checked by the caller via
+	// Mesh_Structures_Compatible.
 	bool Apply_Mesh_Deltas(const W3dMaterialViewer::MeshMaterialData &base,
 		const W3dMaterialViewer::MeshMaterialData &edited,
-		W3dMaterialViewer::MeshMaterialData &dst)
+		W3dMaterialViewer::MeshMaterialData &dst,
+		std::vector<std::string> *changes)
 	{
 		bool changed = false;
 		for (size_t i = 0; i < edited.shaders.size() && i < base.shaders.size()
 				&& i < dst.shaders.size(); i++) {
-			changed |= Apply_Shader_Deltas(base.shaders[i], edited.shaders[i], dst.shaders[i]);
+			changed |= Apply_Shader_Deltas(base.shaders[i], edited.shaders[i], dst.shaders[i], changes);
 		}
 		for (size_t i = 0; i < edited.vertexMaterials.size() && i < base.vertexMaterials.size()
 				&& i < dst.vertexMaterials.size(); i++) {
 			changed |= Apply_VertexMaterial_Deltas(base.vertexMaterials[i],
-				edited.vertexMaterials[i], dst.vertexMaterials[i]);
+				edited.vertexMaterials[i], dst.vertexMaterials[i], changes);
 		}
 		for (size_t i = 0; i < edited.textures.size() && i < base.textures.size()
 				&& i < dst.textures.size(); i++) {
-			changed |= Apply_Texture_Deltas(base.textures[i], edited.textures[i], dst.textures[i]);
+			changed |= Apply_Texture_Deltas(base.textures[i], edited.textures[i], dst.textures[i], changes);
 		}
 		return changed;
 	}
@@ -1614,6 +1645,29 @@ CMaterialViewerFrame::BatchPropagate(const W3dMaterialViewer::MaterialDocument &
 	int totalMeshesChanged = 0;
 	m_BatchReport.Empty();
 
+	// Build the "what changed" section once: the edit is global, so the same
+	// MeshName > Property list applies to every target file. Diff each edited
+	// mesh against its baseline twin into a throwaway copy (Apply_Mesh_Deltas
+	// mutates its dst) purely to harvest the changed-field names.
+	CString changesReport;
+	for (size_t e = 0; e < edited.meshes.size() && e < baseline.meshes.size(); e++) {
+		std::vector<std::string> fields;
+		W3dMaterialViewer::MeshMaterialData scratch = edited.meshes[e];
+		Apply_Mesh_Deltas(baseline.meshes[e], edited.meshes[e], scratch, &fields);
+		for (const std::string &field : fields) {
+			changesReport += "  ";
+			changesReport += edited.meshes[e].meshName.c_str();
+			changesReport += " > ";
+			changesReport += field.c_str();
+			changesReport += "\n";
+		}
+	}
+	if (!changesReport.IsEmpty()) {
+		m_BatchReport += "Changes propagated:\n";
+		m_BatchReport += changesReport;
+		m_BatchReport += "\nFiles:\n";
+	}
+
 	for (int i = 0; i < (int)m_Tabs.size(); i++) {
 		if (i == m_ActiveTab) {
 			continue;	// the active file was already saved
@@ -1660,7 +1714,7 @@ CMaterialViewerFrame::BatchPropagate(const W3dMaterialViewer::MaterialDocument &
 					incompatible++;
 					break;
 				}
-				if (Apply_Mesh_Deltas(baseline.meshes[e], edited.meshes[e], targetMesh)) {
+				if (Apply_Mesh_Deltas(baseline.meshes[e], edited.meshes[e], targetMesh, nullptr)) {
 					changed++;
 				}
 				break;	// first matching edited mesh wins
