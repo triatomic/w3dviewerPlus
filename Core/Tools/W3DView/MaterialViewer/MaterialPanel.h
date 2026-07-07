@@ -111,6 +111,13 @@ bool RequestPanelSave();
 // clicked). All are no-ops / return false when not in edit mode.
 
 bool PanelIsEditing();
+
+// True when Qt keyboard focus is on a text-entry widget (line edit / spin box /
+// editable combo). Lets the host tell "typing into a field" apart from "the
+// panel merely has focus", so plain-letter viewer hotkeys still work when focus
+// is on the panel but not in an editable field (e.g. right after a tab switch).
+bool PanelFocusIsTextEntry();
+
 bool PanelCanUndo();
 bool PanelCanRedo();
 bool PanelCanSaveOrRevert();	// true when editing and dirty

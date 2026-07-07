@@ -47,6 +47,7 @@
 #include <QtGui/QPen>
 #include <QtGui/QPixmap>
 #include <QtWidgets/QAbstractItemView>
+#include <QtWidgets/QAbstractSpinBox>
 #include <QtWidgets/QAction>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QButtonGroup>
@@ -3314,6 +3315,27 @@ bool RequestPanelSave()
 bool PanelIsEditing()
 {
 	return g_Panel != nullptr && g_Panel->Is_Editing();
+}
+
+// True when the Qt keyboard focus is on a widget that consumes typed
+// characters (a line edit, spin box, or editable combo). The host uses this to
+// decide whether a plain letter key (e.g. Shift+F) is the user typing into a
+// field or a viewer hotkey it should handle. Focus merely being *inside* the
+// panel (a tree, a label, a just-switched tab) is not text entry.
+bool PanelFocusIsTextEntry()
+{
+	QWidget *focus = QApplication::focusWidget();
+	if (focus == nullptr) {
+		return false;
+	}
+	// A combo only eats text while it is editable (its internal line edit has
+	// focus); a read-only combo just navigates.
+	if (QComboBox *combo = qobject_cast<QComboBox *>(focus)) {
+		return combo->isEditable();
+	}
+	return qobject_cast<QLineEdit *>(focus) != nullptr
+		|| qobject_cast<QAbstractSpinBox *>(focus) != nullptr
+		|| qobject_cast<QPlainTextEdit *>(focus) != nullptr;
 }
 
 bool PanelCanUndo()

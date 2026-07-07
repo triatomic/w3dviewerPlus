@@ -110,6 +110,8 @@ protected:
 	afx_msg void OnUpdateEditRedo(CCmdUI *cmd_ui);
 	afx_msg void OnEditRevert();
 	afx_msg void OnUpdateEditRevert(CCmdUI *cmd_ui);
+	afx_msg void OnBatchEdit();
+	afx_msg void OnUpdateBatchEdit(CCmdUI *cmd_ui);
 	afx_msg void OnShowFullObject();
 	afx_msg void OnUpdateShowFullObject(CCmdUI *cmd_ui);
 	afx_msg void OnToggleAlpha();
@@ -170,6 +172,17 @@ private:
 	// Edit-mode host hooks handed to the Qt panel (see MaterialPanel.h).
 	bool RunEditGate();
 	bool SaveDocument(const W3dMaterialViewer::MaterialDocument &document);
+
+	// Batch edit: after the active file is saved, propagate ONLY the fields the
+	// user actually changed (diffed as `baseline` vs `edited`) to every OTHER
+	// open tab's file. Meshes are matched across files by their sub-object name
+	// (the part after the last '.'), so a unit's state variants (AVCOMMAND.TURRET,
+	// AVCOMMAND_D.TURRET, ...) all receive the change while keeping each file's own
+	// textures, colours, and unedited settings. Returns the number of meshes
+	// changed across all other files; sets `filesTouched`.
+	int BatchPropagate(const W3dMaterialViewer::MaterialDocument &baseline,
+		const W3dMaterialViewer::MaterialDocument &edited, int &filesTouched);
+
 	void RevertDocument();
 	void OnPanelDirtyChanged(bool dirty);
 	static bool EditGateThunk();
@@ -252,4 +265,12 @@ private:
 	// True while a refresh timer is pending for the debounced live preview
 	// (the pending document itself lives in the active tab).
 	bool					m_LivePreviewPending;
+
+	// Edit > Batch Edit: when on, saving the active file also applies the same
+	// per-mesh edits to every other open tab's file (matched by sub-object name).
+	bool					m_BatchEdit;
+
+	// Per-file outcome lines from the last BatchPropagate, shown in the summary
+	// popup so a skipped/rejected file is explained rather than silently dropped.
+	CString					m_BatchReport;
 };

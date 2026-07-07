@@ -69,6 +69,118 @@ namespace
 	// Longest edge of the texture thumbnails shown in the panel's Textures tab.
 	const int TEXTURE_PREVIEW_MAX_DIM = 96;
 
+	// Sub-object name = the part after the last '.'; document mesh names are
+	// "Container.Mesh" and the container carries the unit's state suffix
+	// (AVCOMMAND / AVCOMMAND_D / ...), so batch edit matches on this tail.
+	const char *Bare_Mesh_Name(const std::string &name)
+	{
+		size_t dot = name.find_last_of('.');
+		return (dot == std::string::npos) ? name.c_str() : name.c_str() + dot + 1;
+	}
+
+	bool Mesh_Names_Match(const std::string &a, const std::string &b)
+	{
+		return ::_stricmp(Bare_Mesh_Name(a), Bare_Mesh_Name(b)) == 0;
+	}
+
+	// The material writer patches structs IN PLACE (fixed-size arrays); it never
+	// adds or removes textures / shaders / vertex materials / passes. So a batch
+	// copy is only safe when the two meshes have the SAME structure — identical
+	// counts of passes, vertex materials, shaders, and textures. Copying across a
+	// structural mismatch would write values the file can't represent, and the
+	// writer's post-write validation would (correctly) reject the whole file.
+	// State variants of the same model normally match; genuinely different meshes
+	// that merely share a sub-name do not, and are skipped rather than corrupted.
+	bool Mesh_Structures_Compatible(const W3dMaterialViewer::MeshMaterialData &a,
+		const W3dMaterialViewer::MeshMaterialData &b)
+	{
+		return a.prelit == b.prelit
+			&& !a.prelit	// prelit meshes are read-only in the writer
+			&& a.passCount == b.passCount
+			&& a.vertexMaterials.size() == b.vertexMaterials.size()
+			&& a.shaders.size() == b.shaders.size()
+			&& a.textures.size() == b.textures.size()
+			&& a.passes.size() == b.passes.size();
+	}
+
+	// Applies ONLY the shader fields that differ between `base` and `edited` onto
+	// `dst`. A field the user left alone stays whatever the target file has, so a
+	// mesh in another state file keeps its own unrelated shader settings.
+	// Returns true if any field was changed.
+	bool Apply_Shader_Deltas(const W3dMaterialViewer::ShaderData &base,
+		const W3dMaterialViewer::ShaderData &edited, W3dMaterialViewer::ShaderData &dst)
+	{
+		bool changed = false;
+		#define DELTA(field) if (edited.field != base.field) { dst.field = edited.field; changed = true; }
+		DELTA(depthCompare) DELTA(depthMask) DELTA(destBlend) DELTA(priGradient)
+		DELTA(secGradient) DELTA(srcBlend) DELTA(texturing) DELTA(detailColorFunc)
+		DELTA(detailAlphaFunc) DELTA(alphaTest) DELTA(postDetailColorFunc) DELTA(postDetailAlphaFunc)
+		#undef DELTA
+		return changed;
+	}
+
+	// Applies only the vertex-material fields the user changed (colours, opacity,
+	// shininess, attributes/mapping, mapper args). The material name is never
+	// touched.
+	bool Apply_VertexMaterial_Deltas(const W3dMaterialViewer::VertexMaterialData &base,
+		const W3dMaterialViewer::VertexMaterialData &edited, W3dMaterialViewer::VertexMaterialData &dst)
+	{
+		bool changed = false;
+		#define DELTA(field) if (edited.field != base.field) { dst.field = edited.field; changed = true; }
+		DELTA(attributes) DELTA(shininess) DELTA(opacity) DELTA(translucency)
+		DELTA(mapperArgs0) DELTA(mapperArgs1)
+		#undef DELTA
+		#define DELTA_RGB(field) if (::memcmp(edited.field, base.field, sizeof(edited.field)) != 0) \
+			{ ::memcpy(dst.field, edited.field, sizeof(dst.field)); changed = true; }
+		DELTA_RGB(ambient) DELTA_RGB(diffuse) DELTA_RGB(specular) DELTA_RGB(emissive)
+		#undef DELTA_RGB
+		return changed;
+	}
+
+	// Applies only the texture SETTINGS the user changed (attributes incl. clamp
+	// bits, anim type, frame count/rate). The texture *name* (which file the mesh
+	// points at) is never touched, so each state variant keeps its own textures.
+	bool Apply_Texture_Deltas(const W3dMaterialViewer::TextureData &base,
+		const W3dMaterialViewer::TextureData &edited, W3dMaterialViewer::TextureData &dst)
+	{
+		bool changed = false;
+		#define DELTA(field) if (edited.field != base.field) { dst.field = edited.field; changed = true; }
+		DELTA(attributes) DELTA(animType) DELTA(frameCount) DELTA(frameRate)
+		#undef DELTA
+		// Ensure a texture-info chunk exists to hold any changed settings.
+		if (changed && edited.hasInfo) {
+			dst.hasInfo = true;
+		}
+		return changed;
+	}
+
+	// Applies the user's edits (baseline vs edited) onto one structurally-matching
+	// target mesh, field by field, leaving unchanged fields as the target had
+	// them. Returns true if anything was applied. Requires all three meshes to be
+	// structurally compatible (same pass/material/shader/texture counts) — the
+	// baseline and edited always are (same file); the target is checked by the
+	// caller via Mesh_Structures_Compatible.
+	bool Apply_Mesh_Deltas(const W3dMaterialViewer::MeshMaterialData &base,
+		const W3dMaterialViewer::MeshMaterialData &edited,
+		W3dMaterialViewer::MeshMaterialData &dst)
+	{
+		bool changed = false;
+		for (size_t i = 0; i < edited.shaders.size() && i < base.shaders.size()
+				&& i < dst.shaders.size(); i++) {
+			changed |= Apply_Shader_Deltas(base.shaders[i], edited.shaders[i], dst.shaders[i]);
+		}
+		for (size_t i = 0; i < edited.vertexMaterials.size() && i < base.vertexMaterials.size()
+				&& i < dst.vertexMaterials.size(); i++) {
+			changed |= Apply_VertexMaterial_Deltas(base.vertexMaterials[i],
+				edited.vertexMaterials[i], dst.vertexMaterials[i]);
+		}
+		for (size_t i = 0; i < edited.textures.size() && i < base.textures.size()
+				&& i < dst.textures.size(); i++) {
+			changed |= Apply_Texture_Deltas(base.textures[i], edited.textures[i], dst.textures[i]);
+		}
+		return changed;
+	}
+
 	// Decodes a small BGRA thumbnail for the texture using the engine's own
 	// loader (_Create_DX8_Surface resolves through the file factory and falls
 	// back from .tga to .dds), so the Qt panel never parses image formats.
@@ -190,6 +302,8 @@ BEGIN_MESSAGE_MAP(CMaterialViewerFrame, CFrameWnd)
 	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_REDO, OnUpdateEditRedo)
 	ON_COMMAND(IDM_MATVIEWER_REVERT, OnEditRevert)
 	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_REVERT, OnUpdateEditRevert)
+	ON_COMMAND(IDM_MATVIEWER_BATCH_EDIT, OnBatchEdit)
+	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_BATCH_EDIT, OnUpdateBatchEdit)
 	ON_COMMAND(IDM_MATVIEWER_SHOW_FULL, OnShowFullObject)
 	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_SHOW_FULL, OnUpdateShowFullObject)
 	ON_COMMAND(IDM_TOGGLE_ALPHA, OnToggleAlpha)
@@ -429,7 +543,8 @@ CMaterialViewerFrame::CMaterialViewerFrame()
 	  m_TabBarWnd(nullptr),
 	  m_GroundSliderWnd(nullptr),
 	  m_ActiveTab(-1),
-	  m_LivePreviewPending(false)
+	  m_LivePreviewPending(false),
+	  m_BatchEdit(false)
 {
 }
 
@@ -607,6 +722,32 @@ CMaterialViewerFrame::PreTranslateMessage(MSG *msg)
 		}
 	}
 
+	// Shift+letter view toggles (Shift+F = Show Full Object, Shift+G = Show
+	// Ground Plane). Checked BEFORE the Qt hand-off below, but only when focus
+	// is NOT in a text-entry widget — so it still fires when the panel merely
+	// has focus (e.g. right after a tab switch, where focus lands on the panel
+	// but not an editable field), while a user typing an uppercase letter into a
+	// line edit / spin box is unaffected. Ignore auto-repeat (bit 30 of lParam)
+	// so a held key doesn't flip the toggle rapidly, and require Shift w/o Ctrl.
+	if (msg->message == WM_KEYDOWN
+			&& (::GetKeyState(VK_SHIFT) & 0x8000)
+			&& !(::GetKeyState(VK_CONTROL) & 0x8000)
+			&& (msg->lParam & (1 << 30)) == 0
+#ifdef W3DVIEW_HAS_QT
+			&& !W3dMaterialViewer::PanelFocusIsTextEntry()
+#endif
+			) {
+		UINT command = 0;
+		switch (msg->wParam) {
+			case 'F': command = IDM_MATVIEWER_SHOW_FULL; break;
+			case 'G': command = IDM_MATVIEWER_GROUND; break;
+		}
+		if (command != 0) {
+			SendMessage(WM_COMMAND, MAKEWPARAM(command, 0), 0);
+			return TRUE;
+		}
+	}
+
 	if (msg->message >= WM_KEYFIRST && msg->message <= WM_KEYLAST) {
 #ifdef W3DVIEW_HAS_QT
 		HWND panel = m_PanelWnd;
@@ -621,27 +762,6 @@ CMaterialViewerFrame::PreTranslateMessage(MSG *msg)
 			}
 		}
 #endif
-	}
-
-	// Shift+letter view toggles (Shift+F = Show Full Object, Shift+G = Show
-	// Ground Plane). Handled AFTER the Qt hand-off above so a user typing an
-	// uppercase letter into a panel text field is unaffected — these only fire
-	// when focus is on the frame/preview, not the material panel. Ignore
-	// auto-repeat (bit 30 of lParam) so a held key doesn't flip the toggle
-	// rapidly, and require Shift without Ctrl.
-	if (msg->message == WM_KEYDOWN
-			&& (::GetKeyState(VK_SHIFT) & 0x8000)
-			&& !(::GetKeyState(VK_CONTROL) & 0x8000)
-			&& (msg->lParam & (1 << 30)) == 0) {
-		UINT command = 0;
-		switch (msg->wParam) {
-			case 'F': command = IDM_MATVIEWER_SHOW_FULL; break;
-			case 'G': command = IDM_MATVIEWER_GROUND; break;
-		}
-		if (command != 0) {
-			SendMessage(WM_COMMAND, MAKEWPARAM(command, 0), 0);
-			return TRUE;
-		}
 	}
 
 	return CFrameWnd::PreTranslateMessage(msg);
@@ -1281,6 +1401,22 @@ CMaterialViewerFrame::OnUpdateEditRevert(CCmdUI *cmd_ui)
 #endif
 }
 
+// Edit > Batch Edit toggle. When on, a Save propagates the active file's per-mesh
+// material edits to every other open tab's file (see BatchPropagate).
+void
+CMaterialViewerFrame::OnBatchEdit()
+{
+	m_BatchEdit = !m_BatchEdit;
+}
+
+void
+CMaterialViewerFrame::OnUpdateBatchEdit(CCmdUI *cmd_ui)
+{
+	// Only meaningful with more than one file open.
+	cmd_ui->Enable(m_Tabs.size() > 1);
+	cmd_ui->SetCheck(m_BatchEdit ? 1 : 0);
+}
+
 ////////////////////////////////////////////////////////////////////////////
 //
 //	Preview model selection: the pane shows the mesh selected in the material
@@ -1416,6 +1552,16 @@ CMaterialViewerFrame::RunEditGate()
 bool
 CMaterialViewerFrame::SaveDocument(const W3dMaterialViewer::MaterialDocument &document)
 {
+	// Snapshot the pristine baseline (last saved/loaded state) BEFORE we sync
+	// Active().document to the edit below. Batch edit diffs baseline vs edited to
+	// propagate only the fields the user actually changed. Copy is cheap relative
+	// to a disk save and only taken when batch mode is on with >1 file.
+	W3dMaterialViewer::MaterialDocument baseline;
+	const bool wantBatch = (m_BatchEdit && m_Tabs.size() > 1);
+	if (wantBatch) {
+		baseline = Active().document;
+	}
+
 	std::string error;
 	if (!W3dMaterialViewer::SaveMaterialDocument(document, error)) {
 		CString message;
@@ -1430,7 +1576,145 @@ CMaterialViewerFrame::SaveDocument(const W3dMaterialViewer::MaterialDocument &do
 
 	ReloadAssetsForPreview();
 	UpdateTitle();
+
+	// Batch edit: fan ONLY the changed fields out to the other open files.
+	if (wantBatch) {
+		int filesTouched = 0;
+		int meshesChanged = BatchPropagate(baseline, document, filesTouched);
+		CString message;
+		if (meshesChanged > 0) {
+			message.Format("Batch edit applied.\n\n%d mesh%s updated across %d other file%s.\n\n%s",
+				meshesChanged, (meshesChanged == 1) ? "" : "es",
+				filesTouched, (filesTouched == 1) ? "" : "s",
+				(LPCTSTR)m_BatchReport);
+		} else {
+			message = "Batch edit: no meshes were updated in the other open files.\n\n";
+			message += m_BatchReport;
+		}
+		::MessageBox(m_hWnd, message, "W3D Material Viewer", MB_ICONINFORMATION | MB_OK);
+	}
 	return true;
+}
+
+// Applies the just-saved active document's per-mesh edits to every OTHER open
+// tab's on-disk file. For each other file: parse it fresh, and for each of its
+// meshes whose sub-object name matches one in the saved document AND is
+// structurally compatible (same pass/material/shader/texture counts), overwrite
+// that mesh's material payload; write the file back when at least one mesh
+// changed. SaveMaterialDocument still applies its own round-trip + post-write
+// validation gate, so a file it cannot reproduce exactly is never modified.
+// Every per-file outcome (updated / partially skipped / rejected with reason) is
+// recorded in m_BatchReport for the summary popup. Returns total meshes changed;
+// sets `filesTouched` to the count of files actually rewritten.
+int
+CMaterialViewerFrame::BatchPropagate(const W3dMaterialViewer::MaterialDocument &baseline,
+	const W3dMaterialViewer::MaterialDocument &edited, int &filesTouched)
+{
+	filesTouched = 0;
+	int totalMeshesChanged = 0;
+	m_BatchReport.Empty();
+
+	for (int i = 0; i < (int)m_Tabs.size(); i++) {
+		if (i == m_ActiveTab) {
+			continue;	// the active file was already saved
+		}
+		const std::string &path = m_Tabs[i].sourceFilePath;
+
+		// Short display name (file name only) for the per-file report line.
+		const char *slash = path.empty() ? nullptr : ::strrchr(path.c_str(), '\\');
+		const char *fwd = path.empty() ? nullptr : ::strrchr(path.c_str(), '/');
+		if (fwd != nullptr && (slash == nullptr || fwd > slash)) {
+			slash = fwd;
+		}
+		CString shortName = path.empty() ? "(no file)"
+			: (slash ? slash + 1 : path.c_str());
+
+		if (path.empty()) {
+			m_BatchReport += "  - " + shortName + ": no on-disk file, skipped\n";
+			continue;
+		}
+
+		// Parse a fresh copy from disk so we edit exactly the file's own bytes.
+		W3dMaterialViewer::MaterialDocument target;
+		if (!W3dMaterialViewer::ParseMaterialDocument(path.c_str(), target)) {
+			m_BatchReport += "  - " + shortName + ": could not be parsed, skipped\n";
+			continue;
+		}
+
+		int changed = 0;
+		int incompatible = 0;
+		for (W3dMaterialViewer::MeshMaterialData &targetMesh : target.meshes) {
+			// Find the edited mesh (and its baseline twin) by sub-name. baseline
+			// and edited share order and structure (same file), so index e maps
+			// to the same mesh in both.
+			for (size_t e = 0; e < edited.meshes.size(); e++) {
+				if (!Mesh_Names_Match(targetMesh.meshName, edited.meshes[e].meshName)) {
+					continue;
+				}
+				if (e >= baseline.meshes.size()) {
+					break;	// no baseline twin (unusual); nothing to diff against
+				}
+				// Only apply if the target mesh is structurally compatible with the
+				// edited one, so the changed-field indices line up 1:1.
+				if (!Mesh_Structures_Compatible(edited.meshes[e], targetMesh)) {
+					incompatible++;
+					break;
+				}
+				if (Apply_Mesh_Deltas(baseline.meshes[e], edited.meshes[e], targetMesh)) {
+					changed++;
+				}
+				break;	// first matching edited mesh wins
+			}
+		}
+		if (changed == 0) {
+			if (incompatible > 0) {
+				CString line;
+				line.Format("  - %s: %d mesh%s matched by name but differ in structure, skipped\n",
+					(LPCTSTR)shortName, incompatible, (incompatible == 1) ? "" : "es");
+				m_BatchReport += line;
+			} else {
+				m_BatchReport += "  - " + shortName + ": no changed meshes matched, skipped\n";
+			}
+			continue;
+		}
+
+		std::string save_error;
+		if (W3dMaterialViewer::SaveMaterialDocument(target, save_error)) {
+			totalMeshesChanged += changed;
+			filesTouched++;
+
+			CString line;
+			if (incompatible > 0) {
+				line.Format("  - %s: %d mesh%s updated (%d skipped: structure differs)\n",
+					(LPCTSTR)shortName, changed, (changed == 1) ? "" : "es", incompatible);
+			} else {
+				line.Format("  - %s: %d mesh%s updated\n", (LPCTSTR)shortName,
+					changed, (changed == 1) ? "" : "es");
+			}
+			m_BatchReport += line;
+
+			// If this file is an open tab, keep its cached document in sync and
+			// drop its stale prototypes so a later switch reloads fresh bytes.
+			m_Tabs[i].document = target;
+			WW3DAssetManager *assets = WW3DAssetManager::Get_Instance();
+			if (assets != nullptr) {
+				for (const W3dMaterialViewer::MeshMaterialData &mesh : target.meshes) {
+					assets->Remove_Prototype(mesh.meshName.c_str());
+				}
+				if (!target.topLevelName.empty()) {
+					assets->Remove_Prototype(target.topLevelName.c_str());
+				}
+			}
+		} else {
+			CString line;
+			line.Format("  - %s: %d matched but the write was rejected (%s)\n",
+				(LPCTSTR)shortName, changed,
+				save_error.empty() ? "unknown reason" : save_error.c_str());
+			m_BatchReport += line;
+		}
+	}
+
+	return totalMeshesChanged;
 }
 
 void

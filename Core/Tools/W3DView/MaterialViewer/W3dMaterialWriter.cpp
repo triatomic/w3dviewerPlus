@@ -304,9 +304,13 @@ bool Textures_Match(const TextureData &a, const TextureData &b)
 	return true;
 }
 
-bool Documents_Match(const MaterialDocument &edited, const MaterialDocument &reparsed)
+bool Documents_Match(const MaterialDocument &edited, const MaterialDocument &reparsed, std::string *mismatch = nullptr)
 {
+	auto note = [&](const std::string &why) { if (mismatch != nullptr) *mismatch = why; };
+
 	if (edited.meshes.size() != reparsed.meshes.size()) {
+		note("mesh count " + std::to_string(edited.meshes.size()) + " vs reparsed "
+			+ std::to_string(reparsed.meshes.size()));
 		return false;
 	}
 
@@ -319,26 +323,39 @@ bool Documents_Match(const MaterialDocument &edited, const MaterialDocument &rep
 			continue;
 		}
 
-		if (_stricmp(a.meshName.c_str(), b.meshName.c_str()) != 0
-				|| a.surfaceType != b.surfaceType
-				|| a.sortLevel != b.sortLevel
+		if (_stricmp(a.meshName.c_str(), b.meshName.c_str()) != 0) {
+			note("mesh[" + std::to_string(m) + "] name '" + a.meshName + "' vs '" + b.meshName + "'");
+			return false;
+		}
+		if (a.surfaceType != b.surfaceType || a.sortLevel != b.sortLevel
 				|| a.vertexMaterials.size() != b.vertexMaterials.size()
 				|| a.shaders.size() != b.shaders.size()
 				|| a.textures.size() != b.textures.size()) {
+			char buf[256];
+			_snprintf(buf, sizeof(buf), "mesh '%s': surf %u/%u sort %d/%d vmat %zu/%zu shader %zu/%zu tex %zu/%zu",
+				a.meshName.c_str(), a.surfaceType, b.surfaceType, a.sortLevel, b.sortLevel,
+				a.vertexMaterials.size(), b.vertexMaterials.size(), a.shaders.size(), b.shaders.size(),
+				a.textures.size(), b.textures.size());
+			note(buf);
 			return false;
 		}
 		for (size_t i = 0; i < a.vertexMaterials.size(); i++) {
 			if (!Materials_Match(a.vertexMaterials[i], b.vertexMaterials[i])) {
+				note("mesh '" + a.meshName + "' vertex material " + std::to_string(i) + " differs");
 				return false;
 			}
 		}
 		for (size_t i = 0; i < a.shaders.size(); i++) {
 			if (!Shaders_Match(a.shaders[i], b.shaders[i])) {
+				note("mesh '" + a.meshName + "' shader " + std::to_string(i) + " differs");
 				return false;
 			}
 		}
 		for (size_t i = 0; i < a.textures.size(); i++) {
 			if (!Textures_Match(a.textures[i], b.textures[i])) {
+				note("mesh '" + a.meshName + "' texture " + std::to_string(i)
+					+ " differs (edited '" + a.textures[i].name + "' hasInfo " + (a.textures[i].hasInfo ? "1" : "0")
+					+ " vs reparsed '" + b.textures[i].name + "' hasInfo " + (b.textures[i].hasInfo ? "1" : "0") + ")");
 				return false;
 			}
 		}
@@ -409,9 +426,15 @@ bool SaveMaterialDocument(const MaterialDocument &document, std::string &errorMe
 
 	{
 		MaterialDocument reparsed;
-		if (!ParseMaterialDocument(tmp_path.c_str(), reparsed) || !Documents_Match(document, reparsed)) {
+		std::string mismatch;
+		if (!ParseMaterialDocument(tmp_path.c_str(), reparsed)
+				|| !Documents_Match(document, reparsed, &mismatch)) {
 			remove(tmp_path.c_str());
-			errorMessage = "Validation failed: the written file did not parse back to the edited values. The original file was not modified.";
+			errorMessage = "Validation failed: the written file did not parse back to the edited values";
+			if (!mismatch.empty()) {
+				errorMessage += " [" + mismatch + "]";
+			}
+			errorMessage += ". The original file was not modified.";
 			return false;
 		}
 	}

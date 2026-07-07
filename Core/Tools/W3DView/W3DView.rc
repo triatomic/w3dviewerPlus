@@ -449,6 +449,8 @@ BEGIN
         MENUITEM "&Redo\tCtrl+Shift+Z",         IDM_MATVIEWER_REDO
         MENUITEM SEPARATOR
         MENUITEM "Re&vert",                     IDM_MATVIEWER_REVERT
+        MENUITEM SEPARATOR
+        MENUITEM "&Batch Edit (all open files)", IDM_MATVIEWER_BATCH_EDIT
     END
     POPUP "&View"
     BEGIN
