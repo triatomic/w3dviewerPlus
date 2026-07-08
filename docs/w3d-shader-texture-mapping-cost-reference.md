@@ -150,27 +150,271 @@ Control a **second texture stage**. Anything but "disable" = multitexturing.
 
 ## Stage mapping (UV mappers)
 
-From `MAPPERS.TXT`. Mappers run **on the CPU per frame** to build a texture matrix
-(`D3DTS_TEXTURE0/1`); they add **no per-pixel GPU cost**, only a small per-object
-CPU cost — and, for animated ones, they keep the surface **dynamic** (opts it out
-of static batching, keeps `WW3D::Sync` advancing it).
+Source of truth: `mapper.{h,cpp}` (WW3D2) and `VertexMaterialClass::Apply`
+(`vertmaterial.cpp:962`). The cost model here is the opposite of the intuitive
+"mappers chew UVs on the CPU" — reading the code, the CPU work is O(1) per mapper
+and the actual UV transform happens on the **GPU**.
 
-| Mapper | What it does | Relative cost |
+### How a mapper actually works
+
+A mapper does NOT touch per-vertex UVs on the CPU. Every mapper's `Apply()` does
+just three things (see `ScaleTextureMapperClass::Apply`, `mapper.cpp:88`):
+
+1. `Calculate_Texture_Matrix(m)` — build one **4×4 texture matrix** with a handful
+   of scalar ops.
+2. `DX8Wrapper::Set_Transform(D3DTS_TEXTURE0 + Stage, m)` — hand that matrix to the
+   fixed-function pipeline.
+3. Set `D3DTSS_TEXCOORDINDEX` + `D3DTSS_TEXTURETRANSFORMFLAGS = D3DTTFF_COUNT2`.
+
+The **GPU's fixed-function texture-transform stage** then multiplies every vertex's
+UV by that matrix during T&L — per-vertex, but on the GPU, essentially free (it is
+already running vertex transform). So a mapper's job is "compute one small matrix
+and set a few states," not "rewrite the vertex UV array."
+
+`Apply()` runs **once per vertex-material bind** — i.e. once per draw batch, not
+once per vertex and not once globally per frame (`vertmaterial.cpp:964`). With **no**
+mapper, `Apply` sets `D3DTTFF_DISABLE` (`vertmaterial.cpp:967`): the texture
+transform is fully off — the genuine zero-cost path.
+
+Animated mappers (`Is_Time_Variant()` → true) rebuild their matrix each time from
+`WW3D::Get_Sync_Time()`, so the matrix differs frame to frame; static ones
+(`SCALE`) build a constant matrix.
+
+### Two flavors, two costs
+
+**Matrix mappers** (offset / scale / rotate / sine / grid / edge / bumpenv): the
+CPU builds a matrix from time and constants — a few adds, or one `Floor`/`Clamp`,
+or one `sin`/`cos`. That is the entire per-batch CPU cost. Example: `LinearOffset`
+is `offset += deltaPerMS * elapsed; frac(); write two matrix cells`
+(`mapper.cpp:157`).
+
+**Environment mappers** (`CLASSIC_ENVIRONMENT`, `ENVIRONMENT`, `EDGE`, the `WS_*`
+and `GRID_*` env variants): these do **GPU texgen**, not CPU vector math. Their
+`Apply` sets `D3DTSS_TEXCOORDINDEX` to `D3DTSS_TCI_CAMERASPACENORMAL` (classic) or
+`D3DTSS_TCI_CAMERASPACEREFLECTIONVECTOR` (reflection) (`mapper.cpp:629`, `:655`), so
+the **GPU** generates the UVs from each vertex's normal / reflection vector. The CPU
+side is often a *constant* 0.5-bias matrix (`ClassicEnvironmentMapperClass::
+Calculate_Texture_Matrix`, `mapper.cpp:636` — no time term at all). Their real cost
+is a hard requirement: **vertex normals must be present in the stream**
+(`Needs_Normals()` → true).
+
+Perf impact = the real end-to-end cost in a scene, folding in the second-order
+effects (needs-normals, ties to a costly shader, per-bind matrix rebuild) — not the
+per-batch math, which is negligible for every mapper. Note: animation does **not**
+cost batching here (see #3 below); an animated mapper just rebuilds a
+non-cacheable matrix per material bind.
+
+| Mapper | CPU per batch | GPU | Perf impact | Notes |
+|---|---|---|---|---|
+| **(none) / plain UV** | zero (`D3DTTFF_DISABLE`) | none | **None** | texture transform fully off |
+| **SCALE** | build 1 constant matrix, once | fixed-func UV × matrix | **Negligible** | constant matrix (not time-variant) |
+| **LINEAR_OFFSET** | 2 muls + `Floor`/`Clamp` | fixed-func UV × matrix | **Low** | animated: rebuilds matrix per bind |
+| **STEP / ZIGZAG / RANDOM** | a few adds + branch (`RANDOM` also 1 rand) | same | **Low** | animated: rebuilds matrix per bind |
+| **ROTATE** | 1 `sin`/`cos` + matrix build | same | **Low** | animated: rebuilds matrix per bind |
+| **SINE_LINEAR_OFFSET** | a couple of `sin()` | same | **Low** | animated: rebuilds matrix per bind |
+| **GRID** | integer frame timing → sub-rect offset | same | **Low** | animated flipbook |
+| **SCREEN** | LinearOffset math (view-dependent) | same | **Low** | recomputed as camera moves |
+| **CLASSIC_ENVIRONMENT** | constant 0.5-bias matrix | **GPU texgen from normal** | **Low–Med** | requires vertex normals in the stream |
+| **ENVIRONMENT** | constant 0.5-bias matrix | **GPU texgen from reflection vector** | **Low–Med** | requires normals; same CPU cost as classic |
+| **EDGE** | 1 add + `Floor` (V scroll) | GPU texgen (normal or reflection) | **Low–Med** | requires normals; animated |
+| **WS_* environment** | axis-swizzled matrix from world transform | GPU texgen from normal | **Low–Med** | requires normals; world-space |
+| **GRID_* / GRID_WS_* environment** | grid timing + env matrix | GPU texgen | **Low–Med** | requires normals; animated env |
+| **BUMPENV** | LinearOffset math + a rotating bump matrix | pairs with the bump-env **shader** gradient | **Medium** | drags in the bump-env shader (burns a texture stage) — the priciest combo |
+
+### Does the argument *value* matter? (FPS, speed, scale, …)
+
+**No.** The numeric value of a mapper's arguments — `FPS`, `Speed`, `UPerSec`/
+`VPerSec`, `SPS`, `Period`, `UScale`/`VScale`, etc. — has **zero** effect on
+performance. A texture scrolling at 0.1/sec and one at 1000/sec cost exactly the
+same; a 1-FPS flipbook and a 240-FPS flipbook cost exactly the same.
+
+Why, from the code:
+
+- **The value is a constant folded in once at construction, not per frame.** `GRID`
+  turns `FPS` into `MSPerFrame = 1000/fps` in `initialize()` (`mapper.cpp:293`);
+  `ROTATE` turns `Speed` into `RadiansPerMilliSec` in its constructor
+  (`mapper.cpp:343`); `LINEAR_OFFSET` turns `UPerSec`/`VPerSec` into
+  `UVOffsetDeltaPerMS` once (`mapper.cpp:122`). Nothing re-derives these per frame.
+
+- **The per-frame update is fixed-cost arithmetic regardless of the value.** `GRID`'s
+  `update_temporal_state` is always the same `Remainder / MSPerFrame` divide + modulo
+  (`mapper.cpp:306`) — a bigger FPS just makes `MSPerFrame` smaller so the divide
+  yields a larger integer; it is the *same* divide. `LINEAR_OFFSET` is always
+  `offset += deltaPerMS * elapsed; frac()` (`mapper.cpp:161`). `ROTATE` is always one
+  `CurrentAngle += RadiansPerMilliSec * delta`. Faster animation ≠ more work per
+  frame; it just plugs a different number into the same operations.
+
+- **Higher FPS does NOT mean more updates.** The mapper is evaluated once per material
+  bind per rendered frame (see #3), driven by `WW3D::Get_Sync_Time()` — never by the
+  animation's own rate. A 1000-FPS flipbook still updates once per rendered frame; it
+  simply advances more grid cells per update (same modulo math). It does not force
+  extra draws or extra evaluations.
+
+**Practical takeaway:** tune `FPS` / `Speed` / `Scale` purely for the look you want —
+there is no performance budget attached to the number. (The only value that changes
+*anything* structural is `Log2Width` on `GRID`, which sets how the texture is
+subdivided; even that is a constant mask, not a per-frame cost.)
+
+### What actually costs, ranked
+
+1. **`BUMPENV`** — not because the mapper is heavy, but because it only makes sense
+   paired with the bump-env primary-gradient shader, which burns a texture stage
+   (see the Primary Gradient row above). The mapper itself is LinearOffset + one
+   extra rotating matrix.
+2. **Environment mappers** — cheap CPU, but they **force vertex normals** into the
+   stream and depend on fixed-function texgen; heavier than a plain scroll only in
+   that constraint, not in per-batch math.
+3. **Animated matrix mappers** (offset / rotate / sine / grid / …) — the real cost
+   is small and specific, and it is worth being precise about because it is easy to
+   overstate.
+
+   **What it is NOT:** in this engine an animated mapper does **not** kick the
+   object out of static batching. The `VertexMaterialClass::Are_Mappers_Time_Variant()`
+   query exists (`vertmaterial.h:306`) but **has no caller** — nothing in the render
+   path branches on it. Time-variant and constant mappers travel the exact same
+   draw path; there is no "dynamic vertex buffer" or "excluded from the static mesh
+   list" penalty tied to animation here.
+
+   **What it actually is:** the mapper's matrix is rebuilt inside
+   `VertexMaterialClass::Apply()`, which `DX8Wrapper::Apply_Render_State_Changes`
+   only calls when the material bind is dirty (`MATERIAL_CHANGED`,
+   `dx8wrapper.cpp:2263`). So the cost is:
+
+   - **One matrix rebuild + `Set_Transform(D3DTS_TEXTUREn)` per material bind.** For a
+     constant mapper (`SCALE`) the rebuilt matrix is identical every time, so the only
+     "waste" is recomputing a constant; for an animated one it genuinely differs each
+     frame. Either way it is a few scalar ops and one device call — per *bind*, not
+     per vertex.
+
+   - **A dependency on the global sync clock.** Animated mappers read
+     `WW3D::Get_Sync_Time()` (`mapper.cpp:159`), so their motion only advances while
+     something calls `WW3D::Sync()`. That is why, e.g., the Material Viewer has to
+     pump `WW3D::Sync` itself to keep scrolling UVs moving while the main viewport is
+     paused — a correctness detail, not a per-frame cost.
+
+   Net: the incremental cost of *animating* a mapper over leaving it constant is
+   essentially one non-cacheable matrix per bind. Real, but tiny — and unrelated to
+   batching. The only way it becomes visible is pathological fan-out (thousands of
+   separately-bound materials each re-Applying an animated matrix every frame).
+4. **`SCALE` / plain UV** — no per-frame work; plain UV sets `D3DTTFF_DISABLE` and
+   is the true zero.
+
+**Bottom line:** UV mappers are among the *cheapest* things on this list per batch
+(one small matrix + a few state sets). Their cost lives in second-order effects —
+being an environment map (requires vertex normals, ties to fixed-function texgen)
+or dragging in a costly shader (`BUMPENV`) — not in per-vertex CPU work, which they
+don't do, and not in batching, which animation does not affect in this engine.
+
+---
+
+## In-game scaling: one unit, and 20+ of the same unit
+
+The per-mapper numbers above are per *material bind*. To reason about a real scene
+you have to know how binds scale with instance count — which is set by the renderer's
+batching, not by the mapper.
+
+### How the engine batches instances (`dx8renderer.cpp`)
+
+The DX8 mesh renderer groups all visible geometry into **texture categories** keyed by
+`(textures, vertex material, shader)` (`DX8TextureCategoryClass`, sorted in
+`dx8renderer.cpp:1126`). For each category it binds **once** —
+`Set_Texture` / `Set_Material` / `Set_Shader` at `dx8renderer.cpp:1685-1710`, and
+`Set_Material` is what runs the mapper's `Apply()` — then loops over every render task
+that shares that material (`while (prt)`, `dx8renderer.cpp:1729`), drawing each without
+re-binding.
+
+There is **no hardware instancing**: each visible instance is its own
+`PolyRenderTaskClass` (`dx8renderer.cpp:100`) and its own draw call. So for **N copies
+of a unit that share one material**:
+
+- **Mapper `Apply()` runs ONCE per category per frame — not N times.** The matrix build
+  and `Set_Transform` are paid once and amortized across all N instances.
+- **N draw calls** are issued (the real per-instance CPU cost — draw-call overhead, not
+  mapper cost).
+- **GPU work scales with total geometry** — N × the unit's vertices through T&L, N × its
+  pixels through the rasterizer. This is where a mapper's *GPU* character (texgen,
+  fixed-function transform) is multiplied by N, but it is per-vertex/per-pixel work the
+  GPU does anyway; the mapper only decides *which* transform.
+
+### Per-mapper penalty at 20+ instances
+
+N = the instance count (how many copies of the unit are on screen). The last column
+answers: **does this mapper's cost multiply as you add more copies, or is it a one-time
+cost no matter how many you have?**
+
+- **"No"** — flat. The mapper adds no cost that grows with the crowd. Its CPU work
+  (matrix build + `Set_Transform`) is paid once per material category per frame and
+  shared by all N instances, and it adds nothing to the GPU beyond the UV transform a
+  textured vertex already gets. Going from 5 to 50 copies adds draw calls but **zero**
+  extra mapper cost, CPU or GPU.
+- **"GPU only"** — the mapper adds a *distinctive* GPU behavior (texgen from vertex
+  normals) that runs per vertex, so it rises with N × vertices. The CPU/mapper side is
+  still flat (once per category). This isn't a runaway penalty — it's the ordinary "more
+  units = more geometry = more GPU work" — but it's called out because the mapper adds a
+  step (texgen + a normals requirement) that a plain scroll does not.
+- **"Yes"** — the mapper adds a per-pixel cost that genuinely multiplies with the crowd
+  (extra work on every pixel of every instance).
+
+| Mapper | Penalty at N=20+ (same unit) | Cost multiplies with N? |
 |---|---|---|
-| **(none) / plain UV** | uses stored UVs | **zero** — no texture matrix, fully static/batchable |
-| **LINEAR_OFFSET** | scrolls UVs at constant speed | trivial — a couple of adds/frame |
-| **SCALE** | static UV scale (detail mapping) | trivial, constant (not animated) |
-| **STEP / ZIGZAG / RANDOM linear offset** | scroll variants (stepped / reversing / jittered) | trivial — a few branches/frame |
-| **ROTATE** | rotate about a center, then scale | cheap — one sin/cos + matrix build/frame |
-| **SINE_LINEAR_OFFSET** | Lissajous wobble | cheap — a few sin() calls/frame |
-| **GRID** | flipbook animation over a grid of sub-frames | cheap CPU; picks a sub-rect/frame |
-| **SCREEN** | UV = screen position | cheap, but view-dependent (recomputed as camera moves) |
-| **CLASSIC_ENVIRONMENT / ENVIRONMENT** | env-map via normal / reflection vector | moderate — needs env texture + per-vertex vector math; reflection (`ENVIRONMENT`) slightly heavier than normal (`CLASSIC`) |
-| **WS_* / GRID_* environment** | world-space and animated env maps | as above + world-space / grid bookkeeping |
-| **EDGE** | Z of reflection/normal drives U; V scrolls | moderate — reflection math like env maps |
-| **BUMPENV** | sets up (and optionally animates) the bump matrix | **heaviest mapper** — CPU half of the Bump-Env gradient; only meaningful with a bump-env shader, itself the priciest shader mode |
+| **plain UV / SCALE** | none — no transform, or one constant matrix for the whole category | **No** |
+| **LINEAR_OFFSET / STEP / ZIGZAG / RANDOM / ROTATE / SINE / GRID / SCREEN** | one matrix rebuild per category per frame (a few scalar ops), shared by all 20; the GPU applies the same fixed-function UV transform every textured vertex already gets | **No** — the mapper adds nothing that scales; it's the same transform, just a moving matrix |
+| **CLASSIC / ENVIRONMENT / EDGE** | same one-per-category bias matrix, but every instance's vertices **must carry normals**, and the GPU runs camera-space texgen for all N × verts | **GPU only** — texgen runs per vertex (N × verts); CPU/mapper cost stays flat |
+| **WS_* / GRID_WS_* environment** | as above **plus** a 4×4 view-inverse **matrix multiply** in `Calculate_Texture_Matrix` (`mapper.cpp:796`) — still once per category, not per instance | **GPU only** — texgen per vertex (N × verts); the extra CPU multiply is still one-time |
+| **BUMPENV** | the mapper is cheap; the paired **bump-env shader burns a texture stage**, so all N × pixels pay the extra stage — this is the one that stings at scale | **Yes** — extra per-pixel texture stage runs on N × pixels |
 
-**The dominant mapper cost** is not GPU at all: any *animated* mapper makes the
-object permanently dynamic (its texture matrix changes every frame), so the engine
-cannot treat it as static geometry. Plain UV or a static `SCALE` avoids that
-entirely.
+### What actually determines the cost of "20 tanks with scrolling treads"
+
+1. **Do they share a material?** If all 20 use the same texture+material+shader, the
+   mapper is Applied **once**. If they diverge (different team colors → different
+   textures → different categories), you pay the bind — and one mapper Apply — **per
+   category**, i.e. per distinct material, not per instance. Team-color variants are the
+   usual reason N units become a handful of categories instead of one.
+
+2. **Draw-call count (N).** The dominant CPU cost of 20 units is 20+ draw calls, which is
+   true no matter what the mapper is. Scrolling UVs add nothing to that.
+
+3. **The shader/gradient the mapper drags in.** A plain scroll/rotate/grid costs
+   effectively nothing extra at 20× — it is the same GPU transform the vertices would get
+   anyway. The only mapper that changes the per-pixel cost across all N instances is
+   **BUMPENV**, via its shader.
+
+**Rule of thumb for content:** animated UV scroll / rotate / grid / sine on 20+ units is
+free-to-negligible — treat it as cosmetic with no budget. Environment maps cost you the
+normals in the vertex format and fixed-function texgen (fine in moderation, watch it on
+very high-poly units × large counts). **Bump-env is the only mapper worth rationing at
+scale**, and that is really the shader's cost, not the mapper's.
+
+### One object, many meshes, many mappers
+
+The batching key is **material, not mesh** — so the question "does a multi-mesh object
+cost more?" reduces to "how many *distinct* materials does it use?"
+
+When an object is registered, `Add_Mesh` splits each mesh by material and files every
+polygon group into a texture category via `Insert_To_Texture_Category`
+(`dx8renderer.cpp:1234`), keyed by `(textures, vertex material, shader)`. Meshes are not
+kept separate — they are flattened into the shared category list. Therefore:
+
+- **Meshes that share a material merge into ONE category** — one bind, one mapper
+  `Apply()`, regardless of how many meshes (or sub-objects, or HLod levels) feed it. Ten
+  meshes all using the same scrolling-tread material = the mapper runs **once**.
+
+- **Each DISTINCT mapper-using material is one category** — one bind, one mapper `Apply()`
+  each. An object with 4 meshes using 4 different animated materials pays 4 matrix
+  builds; an object with 4 meshes using the *same* material pays 1.
+
+So a multi-mesh object does not cost more *because it has more meshes* — it costs more
+only if those meshes introduce more distinct materials/shaders/texture sets. The per-mesh
+count is irrelevant to mapper cost; the per-**material** count is what you pay.
+
+This composes with the instance rule the obvious way: cost ≈ **(distinct material
+categories in the object) × (one mapper Apply each, per frame)** for the CPU side, plus
+**N instances × per-category draw calls** and **N × total geometry** on the GPU. Adding
+meshes that reuse existing materials is nearly free; adding meshes with new materials
+adds one category (one bind + one mapper Apply) apiece.
+
+**Content takeaway:** an object with many meshes but few materials (the common case —
+sub-objects sharing a texture atlas) is as cheap as a single-mesh object. What raises the
+bill is material *variety* — every extra unique material/shader/texture set is another
+category to bind, whether it lives on one mesh or ten. Consolidating meshes onto shared
+materials, not reducing mesh count, is the lever.
