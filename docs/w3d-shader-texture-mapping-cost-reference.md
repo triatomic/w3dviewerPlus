@@ -418,3 +418,37 @@ sub-objects sharing a texture atlas) is as cheap as a single-mesh object. What r
 bill is material *variety* — every extra unique material/shader/texture set is another
 category to bind, whether it lives on one mesh or ten. Consolidating meshes onto shared
 materials, not reducing mesh count, is the lever.
+
+### Do moving units change any of this?
+
+Units move every frame, so it is fair to ask whether motion adds to the mapper/material
+cost. For the rendering path analysed here: **no** — motion is already the normal case,
+not an extra.
+
+- **Rigid units (vehicles, buildings).** The per-instance render task sets the world
+  matrix from `mesh->Get_Transform()` inside the draw loop
+  (`Set_Transform(D3DTS_WORLD, …)`, `dx8renderer.cpp:1857`). A stationary and a moving
+  instance run the *identical* code; only the matrix *value* differs. Moving a unit costs
+  nothing beyond drawing it. It does not re-bind the material or re-Apply the mapper —
+  those are still once per category, upstream of this per-instance transform.
+
+- **Skinned units (infantry).** `SKIN` meshes set world **identity**
+  (`dx8renderer.cpp:1842`) and are deformed by bones on the CPU each frame. That skinning
+  cost is real and per-instance, but it is driven by **animation**, not by translation
+  through the world, and it is entirely separate from UV mappers.
+
+- **Environment mappers and motion.** Env / WS-env mappers build their matrix from the
+  **view (camera) transform** (`Get_Transform(D3DTS_VIEW)`, `mapper.cpp:797`), not the
+  object's world transform. So a *unit* moving does not touch the env matrix; only the
+  *camera* moving changes it — and it is still rebuilt once per category, not per instance.
+  (Their reflection/normal texgen is per-vertex on the GPU and updates for free as the
+  geometry moves.)
+
+Where movement genuinely costs is **outside** this document's scope — GameLogic
+(pathfinding, steering, collision) and the animation/bone updates that feed
+`mesh->Get_Transform()` and the skin deform. None of that is mapper- or material-related;
+it would be there with plain-UV textures too.
+
+**Takeaway:** movement is orthogonal to mapper cost. A scrolling-tread tank costs the same
+mapper work parked or driving; the driving cost lives in logic and animation, not in the
+material/UV path.
