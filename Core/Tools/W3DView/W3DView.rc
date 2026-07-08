@@ -451,6 +451,7 @@ BEGIN
         MENUITEM "Re&vert",                     IDM_MATVIEWER_REVERT
         MENUITEM SEPARATOR
         MENUITEM "&Batch Edit (all open files)", IDM_MATVIEWER_BATCH_EDIT
+        MENUITEM "Batch &Select (sync mesh across tabs)", IDM_MATVIEWER_BATCH_SELECT
     END
     POPUP "&View"
     BEGIN

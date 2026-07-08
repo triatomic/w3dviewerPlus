@@ -335,6 +335,8 @@ BEGIN_MESSAGE_MAP(CMaterialViewerFrame, CFrameWnd)
 	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_REVERT, OnUpdateEditRevert)
 	ON_COMMAND(IDM_MATVIEWER_BATCH_EDIT, OnBatchEdit)
 	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_BATCH_EDIT, OnUpdateBatchEdit)
+	ON_COMMAND(IDM_MATVIEWER_BATCH_SELECT, OnBatchSelect)
+	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_BATCH_SELECT, OnUpdateBatchSelect)
 	ON_COMMAND(IDM_MATVIEWER_SHOW_FULL, OnShowFullObject)
 	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_SHOW_FULL, OnUpdateShowFullObject)
 	ON_COMMAND(IDM_TOGGLE_ALPHA, OnToggleAlpha)
@@ -575,7 +577,8 @@ CMaterialViewerFrame::CMaterialViewerFrame()
 	  m_GroundSliderWnd(nullptr),
 	  m_ActiveTab(-1),
 	  m_LivePreviewPending(false),
-	  m_BatchEdit(false)
+	  m_BatchEdit(false),
+	  m_BatchSelect(false)
 {
 }
 
@@ -1448,6 +1451,50 @@ CMaterialViewerFrame::OnUpdateBatchEdit(CCmdUI *cmd_ui)
 	cmd_ui->SetCheck(m_BatchEdit ? 1 : 0);
 }
 
+// Edit > Batch Select toggle. When on, picking a mesh in the panel syncs the
+// same-sub-named mesh selection into every other tab (see OnPanelMeshSelected).
+void
+CMaterialViewerFrame::OnBatchSelect()
+{
+	m_BatchSelect = !m_BatchSelect;
+	// Apply immediately to the current selection so turning it on lines the tabs
+	// up right away rather than waiting for the next mesh click.
+	if (m_BatchSelect && !Active().currentMeshName.empty()) {
+		SyncSelectedMeshAcrossTabs(Active().currentMeshName.c_str());
+	}
+}
+
+void
+CMaterialViewerFrame::OnUpdateBatchSelect(CCmdUI *cmd_ui)
+{
+	cmd_ui->Enable(m_Tabs.size() > 1);
+	cmd_ui->SetCheck(m_BatchSelect ? 1 : 0);
+}
+
+// Sets every OTHER tab's remembered mesh selection to the mesh whose sub-object
+// name (part after the last '.') matches `meshName`, so switching tabs stays on
+// the same sub-object. Tabs without a matching mesh keep their own selection.
+// Only the remembered name is changed here; ActivateTab re-selects it in the
+// panel when that tab is next shown.
+void
+CMaterialViewerFrame::SyncSelectedMeshAcrossTabs(const char *meshName)
+{
+	if (meshName == nullptr || meshName[0] == '\0') {
+		return;
+	}
+	for (int i = 0; i < (int)m_Tabs.size(); i++) {
+		if (i == m_ActiveTab) {
+			continue;
+		}
+		for (const W3dMaterialViewer::MeshMaterialData &mesh : m_Tabs[i].document.meshes) {
+			if (Mesh_Names_Match(mesh.meshName, meshName)) {
+				m_Tabs[i].currentMeshName = mesh.meshName;
+				break;	// first sub-name match wins
+			}
+		}
+	}
+}
+
 ////////////////////////////////////////////////////////////////////////////
 //
 //	Preview model selection: the pane shows the mesh selected in the material
@@ -1517,6 +1564,12 @@ CMaterialViewerFrame::OnPanelMeshSelected(const char *meshName)
 		// Full-object view: the displayed object is unchanged, only the
 		// selection outline moves to the newly selected mesh.
 		m_Preview->Set_Highlight_Mesh(meshName);
+	}
+
+	// Batch Select: mirror this selection (by sub-object name) into the other
+	// tabs so switching tabs stays on the same sub-object.
+	if (m_BatchSelect) {
+		SyncSelectedMeshAcrossTabs(meshName);
 	}
 }
 

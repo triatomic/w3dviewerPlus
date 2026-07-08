@@ -112,6 +112,8 @@ protected:
 	afx_msg void OnUpdateEditRevert(CCmdUI *cmd_ui);
 	afx_msg void OnBatchEdit();
 	afx_msg void OnUpdateBatchEdit(CCmdUI *cmd_ui);
+	afx_msg void OnBatchSelect();
+	afx_msg void OnUpdateBatchSelect(CCmdUI *cmd_ui);
 	afx_msg void OnShowFullObject();
 	afx_msg void OnUpdateShowFullObject(CCmdUI *cmd_ui);
 	afx_msg void OnToggleAlpha();
@@ -168,6 +170,10 @@ private:
 	static void GroundSliderChangedThunk(int pos);
 	void OnPanelMeshSelected(const char *meshName);
 	static void PanelMeshSelectedThunk(const char *meshName);
+
+	// Batch Select: copy the given mesh selection (matched by sub-object name,
+	// container ignored) into every other tab's remembered selection.
+	void SyncSelectedMeshAcrossTabs(const char *meshName);
 
 	// Edit-mode host hooks handed to the Qt panel (see MaterialPanel.h).
 	bool RunEditGate();
@@ -269,6 +275,12 @@ private:
 	// Edit > Batch Edit: when on, saving the active file also applies the same
 	// per-mesh edits to every other open tab's file (matched by sub-object name).
 	bool					m_BatchEdit;
+
+	// Edit > Batch Select: when on, selecting a mesh in the panel also selects
+	// the same-sub-named mesh (container ignored) in every other tab, so
+	// switching tabs stays on the same sub-object. Tabs without a match are left
+	// on their own selection (silent).
+	bool					m_BatchSelect;
 
 	// Per-file outcome lines from the last BatchPropagate, shown in the summary
 	// popup so a skipped/rejected file is explained rather than silently dropped.
