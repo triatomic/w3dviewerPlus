@@ -578,7 +578,8 @@ CMaterialViewerFrame::CMaterialViewerFrame()
 	  m_ActiveTab(-1),
 	  m_LivePreviewPending(false),
 	  m_BatchEdit(false),
-	  m_BatchSelect(false)
+	  m_BatchSelect(false),
+	  m_RestoringSelection(false)
 {
 }
 
@@ -1213,10 +1214,17 @@ CMaterialViewerFrame::ActivateTab(int index)
 
 #ifdef W3DVIEW_HAS_QT
 	if (m_PanelWnd != nullptr) {
+		// SetPanelDocument internally re-shows a mesh, which fires the
+		// mesh-selected callback (OnPanelMeshSelected) and would overwrite this
+		// tab's remembered currentMeshName with the panel's default index before
+		// we restore it. Suppress that feedback while we set the document and
+		// re-select the remembered mesh.
+		m_RestoringSelection = true;
 		W3dMaterialViewer::SetPanelDocument(tab.document);
 		if (!tab.currentMeshName.empty()) {
 			W3dMaterialViewer::SelectPanelMesh(tab.currentMeshName.c_str());
 		}
+		m_RestoringSelection = false;
 	}
 #endif
 
@@ -1555,6 +1563,12 @@ void
 CMaterialViewerFrame::OnPanelMeshSelected(const char *meshName)
 {
 	if (meshName == nullptr || meshName[0] == '\0') {
+		return;
+	}
+	// Ignore the callback that fires while ActivateTab programmatically sets the
+	// document/selection — otherwise it would overwrite the tab's remembered mesh
+	// (and re-run the cross-tab sync) with the panel's default index.
+	if (m_RestoringSelection) {
 		return;
 	}
 	Active().currentMeshName = meshName;

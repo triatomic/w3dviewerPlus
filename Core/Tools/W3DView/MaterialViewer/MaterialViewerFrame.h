@@ -282,6 +282,11 @@ private:
 	// on their own selection (silent).
 	bool					m_BatchSelect;
 
+	// True while ActivateTab is programmatically setting the panel document +
+	// selection, so the mesh-selected callback it triggers is ignored (it would
+	// otherwise clobber the tab's remembered mesh with the panel's default).
+	bool					m_RestoringSelection;
+
 	// Per-file outcome lines from the last BatchPropagate, shown in the summary
 	// popup so a skipped/rejected file is explained rather than silently dropped.
 	CString					m_BatchReport;

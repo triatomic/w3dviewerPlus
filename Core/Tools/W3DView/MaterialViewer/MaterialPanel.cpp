@@ -2431,9 +2431,28 @@ public:
 	void Select_Mesh(const char *mesh_name)
 	{
 		QString wanted = QString::fromLatin1(mesh_name);
+
+		// Exact full-name match first ("Container.Mesh").
 		for (size_t i = 0; i < m_Document.meshes.size(); i++) {
 			if (QString::fromStdString(m_Document.meshes[i].meshName)
 					.compare(wanted, Qt::CaseInsensitive) == 0) {
+				Show_Mesh((int)i);
+				return;
+			}
+		}
+
+		// Fall back to the sub-object name (part after the last '.'), so a
+		// selection carried over from another tab/file — whose container prefix
+		// differs (USCLAB_NE.MESH02 vs USCLAB_S.MESH02) — still lands on the
+		// matching mesh here. This is what makes Batch Select work across files
+		// with different container names or mesh counts.
+		int dot = wanted.lastIndexOf(QLatin1Char('.'));
+		QString wantedSub = (dot >= 0) ? wanted.mid(dot + 1) : wanted;
+		for (size_t i = 0; i < m_Document.meshes.size(); i++) {
+			QString name = QString::fromStdString(m_Document.meshes[i].meshName);
+			int d = name.lastIndexOf(QLatin1Char('.'));
+			QString sub = (d >= 0) ? name.mid(d + 1) : name;
+			if (sub.compare(wantedSub, Qt::CaseInsensitive) == 0) {
 				Show_Mesh((int)i);
 				return;
 			}
