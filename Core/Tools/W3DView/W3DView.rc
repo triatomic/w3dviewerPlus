@@ -457,6 +457,7 @@ BEGIN
     POPUP "&View"
     BEGIN
         MENUITEM "Show &Full Object\tShift+F",  IDM_MATVIEWER_SHOW_FULL
+        MENUITEM "&Tint Selected Mesh",         IDM_MATVIEWER_TINT_SELECTION
         MENUITEM SEPARATOR
         POPUP "W3D &Shaders"
         BEGIN

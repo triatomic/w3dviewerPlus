@@ -344,6 +344,8 @@ BEGIN_MESSAGE_MAP(CMaterialViewerFrame, CFrameWnd)
 	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_BATCH_SELECT, OnUpdateBatchSelect)
 	ON_COMMAND(IDM_MATVIEWER_SHOW_FULL, OnShowFullObject)
 	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_SHOW_FULL, OnUpdateShowFullObject)
+	ON_COMMAND(IDM_MATVIEWER_TINT_SELECTION, OnTintSelection)
+	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_TINT_SELECTION, OnUpdateTintSelection)
 	ON_COMMAND(IDM_TOGGLE_ALPHA, OnToggleAlpha)
 	ON_UPDATE_COMMAND_UI(IDM_TOGGLE_ALPHA, OnUpdateToggleAlpha)
 	ON_COMMAND(IDM_SHADER_ADDITIVE, OnShaderAdditive)
@@ -831,6 +833,10 @@ CMaterialViewerFrame::OnCreate(LPCREATESTRUCT create_struct)
 	// Restore the "backup before change" preference (default on).
 	W3dMaterialViewer::Set_Backup_Before_Save(
 		::AfxGetApp()->GetProfileInt("Config", "MatViewerBackupBeforeSave", 1) != 0);
+
+	// Restore the selection-highlight style (default: bounding box).
+	m_Preview->Set_Tint_Highlight(
+		::AfxGetApp()->GetProfileInt("Config", "MatViewerTintSelection", 0) != 0);
 
 #ifdef W3DVIEW_HAS_QT
 	m_PanelWnd = W3dMaterialViewer::CreatePanel(m_hWnd);
@@ -1811,6 +1817,25 @@ void
 CMaterialViewerFrame::OnUpdateShowFullObject(CCmdUI *cmd_ui)
 {
 	cmd_ui->SetCheck(Active().showFullObject ? 1 : 0);
+}
+
+// View > Tint Selected Mesh: highlight the selected sub-object by tinting its
+// triangles with the selection colour instead of the bounding box. Persisted.
+void
+CMaterialViewerFrame::OnTintSelection()
+{
+	if (m_Preview == nullptr) {
+		return;
+	}
+	bool on = !m_Preview->Get_Tint_Highlight();
+	m_Preview->Set_Tint_Highlight(on);
+	::AfxGetApp()->WriteProfileInt("Config", "MatViewerTintSelection", on ? 1 : 0);
+}
+
+void
+CMaterialViewerFrame::OnUpdateTintSelection(CCmdUI *cmd_ui)
+{
+	cmd_ui->SetCheck((m_Preview != nullptr && m_Preview->Get_Tint_Highlight()) ? 1 : 0);
 }
 
 void

@@ -72,6 +72,12 @@ public:
 	// Show Full Object). Null/empty clears the outline.
 	void Set_Highlight_Mesh(const char *name);
 
+	// View > Tint Selected Mesh: highlight the selected sub-object by tinting
+	// its actual triangles with the selection colour instead of drawing the
+	// bounding box (which is still the fallback for skins/non-meshes).
+	void Set_Tint_Highlight(bool on) { m_TintHighlight = on; }
+	bool Get_Tint_Highlight() const { return m_TintHighlight; }
+
 	// How Ctrl+left-drag moves the scene light (Light menu). FREE_ROAM is the
 	// main viewport's trackball rotation about the orbit centre; PER_FACE
 	// places the light on the surface normal of the point under the cursor.
@@ -172,6 +178,12 @@ private:
 	// Must run inside the Begin_Render/End_Render bracket, after the scene.
 	void Render_Highlight_Outline();
 
+	// Tint-mode highlight: re-draws the sub-mesh's triangles as a translucent
+	// selection-coloured overlay at equal depth. Returns false when the
+	// sub-object can't be tinted this way (skin / non-mesh / >64k verts) so the
+	// caller falls back to the bounding box.
+	bool Render_Highlight_Tint(RenderObjClass *sub);
+
 	// Draws the ground plane + blob shadow. Must run inside the render bracket
 	// BEFORE the scene render: the plane writes depth so opaque geometry
 	// occludes it, and the translucent flush afterwards blends glow over it.
@@ -203,6 +215,9 @@ private:
 
 	// Sub-object to outline in the full-object view; empty = no outline.
 	std::string			m_HighlightMeshName;
+
+	// View > Tint Selected Mesh (see Set_Tint_Highlight).
+	bool				m_TintHighlight;
 
 	// Ground plane state. m_GroundZ defaults to the object's bounding-box
 	// bottom on every *new* model load (post-save reloads keep the user's

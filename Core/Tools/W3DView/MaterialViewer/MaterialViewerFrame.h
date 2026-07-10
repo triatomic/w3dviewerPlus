@@ -118,6 +118,8 @@ protected:
 	afx_msg void OnUpdateBatchSelect(CCmdUI *cmd_ui);
 	afx_msg void OnShowFullObject();
 	afx_msg void OnUpdateShowFullObject(CCmdUI *cmd_ui);
+	afx_msg void OnTintSelection();
+	afx_msg void OnUpdateTintSelection(CCmdUI *cmd_ui);
 	afx_msg void OnToggleAlpha();
 	afx_msg void OnUpdateToggleAlpha(CCmdUI *cmd_ui);
 	afx_msg void OnShaderAdditive();

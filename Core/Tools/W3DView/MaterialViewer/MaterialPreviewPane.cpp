@@ -30,6 +30,7 @@
 #include "quat.h"		// Build_Matrix3 / Build_Quaternion / Trackball
 #include "hanim.h"	// animation playback (Set_Animation_Asset)
 #include "rcfile.h"	// ResourceFileClass (embedded Light.w3d gizmo)
+#include <vector>	// scratch vertex buffer for the selection-tint overlay
 #include "wwmath.h"	// DEG_TO_RADF
 #include "mesh.h"
 #include "meshmdl.h"
@@ -80,6 +81,7 @@ CMaterialPreviewPane::CMaterialPreviewPane()
 	  m_AltOnMDown(false),
 	  m_GroundVisible(false),
 	  m_GroundZ(0.0F),
+	  m_TintHighlight(false),
 	  m_Anim(nullptr),
 	  m_AnimPlaying(false),
 	  m_AnimFrame(0.0F),
@@ -685,6 +687,13 @@ CMaterialPreviewPane::Render_Highlight_Outline()
 		return;
 	}
 
+	// Tint mode: paint the mesh's own triangles with the selection colour
+	// instead of the box; falls through to the box when tinting isn't possible.
+	if (m_TintHighlight && Render_Highlight_Tint(sub)) {
+		sub->Release_Ref();
+		return;
+	}
+
 	AABoxClass box;
 	sub->Get_Obj_Space_Bounding_Box(box);
 	Matrix3D tm = sub->Get_Transform();
@@ -742,6 +751,71 @@ CMaterialPreviewPane::Render_Highlight_Outline()
 	dev->SetVertexShader(D3DFVF_XYZ | D3DFVF_DIFFUSE);
 	dev->DrawPrimitiveUP(D3DPT_LINELIST, 12, verts, sizeof(OutlineVertex));
 	DX8Wrapper::Invalidate_Cached_Render_States();
+}
+
+// Re-draws the selected sub-mesh's triangles as a translucent overlay in the
+// selection colour. Runs after the scene inside the render bracket: the mesh
+// was just drawn at these exact positions, so with PASS_LEQUAL and no depth
+// write the tint lands precisely on its visible surfaces (hidden parts stay
+// hidden). Model-space vertices are drawn under the mesh's world transform;
+// the polygon array (TriIndex = three 16-bit indices) doubles directly as the
+// D3DFMT_INDEX16 buffer. Skins deform outside the model-space array, so they
+// (and anything over 64k vertices) report false and keep the box outline.
+bool
+CMaterialPreviewPane::Render_Highlight_Tint(RenderObjClass *sub)
+{
+	if (sub == nullptr || sub->Class_ID() != RenderObjClass::CLASSID_MESH) {
+		return false;
+	}
+	MeshClass *mesh = (MeshClass *)sub;
+	MeshModelClass *model = mesh->Peek_Model();
+	if (model == nullptr || model->Get_Flag(MeshGeometryClass::SKIN)) {
+		return false;
+	}
+
+	int vcount = model->Get_Vertex_Count();
+	int pcount = model->Get_Polygon_Count();
+	const TriIndex *polys = model->Get_Polygon_Array();
+	const Vector3 *verts = model->Get_Vertex_Array();
+	if (vcount <= 0 || vcount > 0xFFFF || pcount <= 0
+			|| polys == nullptr || verts == nullptr) {
+		return false;
+	}
+
+	ShaderClass shader = ShaderClass::_PresetAlphaSolidShader;
+	shader.Set_Depth_Mask(ShaderClass::DEPTH_WRITE_DISABLE);
+	DX8Wrapper::Set_Shader(shader);
+	DX8Wrapper::Set_Texture(0, nullptr);
+
+	VertexMaterialClass *vm = VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_DIFFUSE);
+	DX8Wrapper::Set_Material(vm);
+	if (vm != nullptr) {
+		vm->Release_Ref();
+	}
+
+	DX8Wrapper::Set_Transform(D3DTS_WORLD, mesh->Get_Transform());
+	DX8Wrapper::Apply_Render_State_Changes();
+
+	IDirect3DDevice8 *dev = DX8Wrapper::_Get_D3D_Device8();
+	if (dev == nullptr) {
+		return false;
+	}
+
+	struct TintVertex { float x, y, z; DWORD color; };
+	const DWORD color = 0x60FF00FF;	// selection magenta (matches the box) at ~38% alpha
+	std::vector<TintVertex> tinted(vcount);
+	for (int i = 0; i < vcount; i++) {
+		tinted[i].x = verts[i].X;
+		tinted[i].y = verts[i].Y;
+		tinted[i].z = verts[i].Z;
+		tinted[i].color = color;
+	}
+
+	dev->SetVertexShader(D3DFVF_XYZ | D3DFVF_DIFFUSE);
+	dev->DrawIndexedPrimitiveUP(D3DPT_TRIANGLELIST, 0, vcount, pcount,
+		polys, D3DFMT_INDEX16, &tinted[0], sizeof(TintVertex));
+	DX8Wrapper::Invalidate_Cached_Render_States();
+	return true;
 }
 
 // Draws the ground plane + blob shadow; the drawing itself is shared with the
