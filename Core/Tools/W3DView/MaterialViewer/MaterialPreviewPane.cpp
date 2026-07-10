@@ -28,6 +28,7 @@
 #include "light.h"
 #include "matrix3.h"	// Matrix3x3 for the pan basis
 #include "quat.h"		// Build_Matrix3 / Build_Quaternion / Trackball
+#include "hanim.h"	// animation playback (Set_Animation_Asset)
 #include "rcfile.h"	// ResourceFileClass (embedded Light.w3d gizmo)
 #include "wwmath.h"	// DEG_TO_RADF
 #include "mesh.h"
@@ -79,6 +80,9 @@ CMaterialPreviewPane::CMaterialPreviewPane()
 	  m_AltOnMDown(false),
 	  m_GroundVisible(false),
 	  m_GroundZ(0.0F),
+	  m_Anim(nullptr),
+	  m_AnimPlaying(false),
+	  m_AnimFrame(0.0F),
 	  m_SizeDirty(false),
 	  m_LastRenderTicks(0)
 {
@@ -151,6 +155,11 @@ CMaterialPreviewPane::OnDestroy()
 		m_Scene->Remove_Render_Object(m_RenderObj);
 		m_RenderObj->Release_Ref();
 		m_RenderObj = nullptr;
+	}
+
+	if (m_Anim != nullptr) {
+		m_Anim->Release_Ref();
+		m_Anim = nullptr;
 	}
 
 	if (m_LightMesh != nullptr) {
@@ -326,6 +335,44 @@ void
 CMaterialPreviewPane::Reset_Ground_To_Object()
 {
 	m_GroundZ = CGraphicView::Ground_Default_Z(m_RenderObj);
+}
+
+void
+CMaterialPreviewPane::Set_Animation_Asset(HAnimClass *anim)
+{
+	if (anim != nullptr) {
+		anim->Add_Ref();
+	}
+	if (m_Anim != nullptr) {
+		m_Anim->Release_Ref();
+	}
+	m_Anim = anim;
+	m_AnimFrame = 0.0F;
+
+	if (m_RenderObj != nullptr) {
+		if (m_Anim != nullptr) {
+			m_RenderObj->Set_Animation(m_Anim, 0.0F, RenderObjClass::ANIM_MODE_MANUAL);
+		} else {
+			m_AnimPlaying = false;
+			m_RenderObj->Set_Animation();	// back to the base pose
+		}
+	}
+}
+
+void
+CMaterialPreviewPane::Seek_Animation(float frame)
+{
+	if (m_Anim == nullptr) {
+		return;
+	}
+	float last = (float)(m_Anim->Get_Num_Frames() - 1);
+	if (last < 0.0F) {
+		last = 0.0F;
+	}
+	m_AnimFrame = (frame < 0.0F) ? 0.0F : (frame > last) ? last : frame;
+	if (m_RenderObj != nullptr) {
+		m_RenderObj->Set_Animation(m_Anim, m_AnimFrame, RenderObjClass::ANIM_MODE_MANUAL);
+	}
 }
 
 void
@@ -1081,6 +1128,18 @@ CMaterialPreviewPane::Render()
 		if (elapsed > 0) {
 			WW3D::Update_Logic_Frame_Time((float)elapsed);
 			WW3D::Sync(true);
+		}
+
+		// Advance and (re)apply the animation pose. Applying every frame (not
+		// only while playing) keeps the pose after a post-save reload swapped in
+		// a fresh render object.
+		if (m_Anim != nullptr && m_RenderObj != nullptr) {
+			int frames = m_Anim->Get_Num_Frames();
+			if (m_AnimPlaying && frames > 1 && elapsed > 0) {
+				m_AnimFrame += m_Anim->Get_Frame_Rate() * ((float)elapsed * 0.001F);
+				m_AnimFrame = ::fmodf(m_AnimFrame, (float)frames);
+			}
+			m_RenderObj->Set_Animation(m_Anim, m_AnimFrame, RenderObjClass::ANIM_MODE_MANUAL);
 		}
 	}
 

@@ -104,6 +104,8 @@ protected:
 	afx_msg void OnFileClose();
 	afx_msg void OnFileSave();
 	afx_msg void OnUpdateFileSave(CCmdUI *cmd_ui);
+	afx_msg void OnToggleBackup();
+	afx_msg void OnUpdateToggleBackup(CCmdUI *cmd_ui);
 	afx_msg void OnEditUndo();
 	afx_msg void OnUpdateEditUndo(CCmdUI *cmd_ui);
 	afx_msg void OnEditRedo();
@@ -174,6 +176,28 @@ private:
 	// Batch Select: copy the given mesh selection (matched by sub-object name,
 	// container ignored) into every other tab's remembered selection.
 	void SyncSelectedMeshAcrossTabs(const char *meshName);
+
+	//----- Animation bar -------------------------------------------------------
+
+	// Re-lists the animations that target the previewed object's hierarchy
+	// (HAnimClass::Get_HName matched against the object's HTree name) and
+	// shows/hides the bar. Skips the rebuild when the list is unchanged so a
+	// mesh click during playback doesn't restart the animation.
+	void RefreshAnimBar();
+
+	// Mirrors the pane's playback state into the Qt bar once per rendered frame
+	// (change-detected, so idle frames cost nothing).
+	void PushAnimBarState();
+
+	// User interaction from the bar (synchronous, UI thread).
+	void OnAnimSelected(int index);
+	void OnAnimPlayPause();
+	void OnAnimStop();
+	void OnAnimSeek(int frame);
+	static void AnimSelectedThunk(int index);
+	static void AnimPlayPauseThunk();
+	static void AnimStopThunk();
+	static void AnimSeekThunk(int frame);
 
 	// Edit-mode host hooks handed to the Qt panel (see MaterialPanel.h).
 	bool RunEditGate();
@@ -264,6 +288,16 @@ private:
 	HWND					m_PanelWnd;
 	HWND					m_TabBarWnd;		// Qt QTabBar hosted in the frame
 	HWND					m_GroundSliderWnd;	// Qt QSlider for ground height
+	HWND					m_AnimBarWnd;		// Qt playback strip under the preview
+
+	// Animations matching the previewed object's hierarchy (full asset names,
+	// "HTREE.ANIM"); drives the bar's combo. Empty = bar hidden.
+	std::vector<std::string>	m_AnimNames;
+	bool					m_AnimBarVisible;
+
+	// Last state pushed into the Qt bar (change detection for PushAnimBarState).
+	int						m_LastAnimFrame;
+	bool					m_LastAnimPlaying;
 
 	std::vector<MaterialViewerTab>	m_Tabs;
 	int						m_ActiveTab;		// index into m_Tabs, -1 when empty

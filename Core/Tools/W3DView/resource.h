@@ -669,6 +669,8 @@
 #define IDM_MATVIEWER_BATCH_EDIT        32970
 // Batch select: selecting a mesh selects the same-sub-named mesh in every tab.
 #define IDM_MATVIEWER_BATCH_SELECT      32971
+// Toggle: make a one-time .bak before a save overwrites the original .w3d.
+#define IDM_MATVIEWER_BACKUP            32972
 #define IDD_GROUND_HEIGHT               731
 #define IDC_GROUND_HEIGHT_SLIDER        1189
 // TheSuperHackers @feature Tria 22/04/2026 Show sub-object and bone name labels in viewport.
@@ -754,7 +756,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_3D_CONTROLS                     1
 #define _APS_NEXT_RESOURCE_VALUE        732
-#define _APS_NEXT_COMMAND_VALUE         32972
+#define _APS_NEXT_COMMAND_VALUE         32973
 #define _APS_NEXT_CONTROL_VALUE         1190
 #define _APS_NEXT_SYMED_VALUE           101
 #endif

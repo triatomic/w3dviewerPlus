@@ -99,6 +99,23 @@ public:
 	// Reset Height).
 	void Reset_Ground_To_Object();
 
+	// Animation playback (driven by the Material Viewer's animation bar). The
+	// pane owns a ref on the current animation and re-poses / advances the
+	// frame inside Render(); the frame window mirrors the state into the Qt bar
+	// after each render. Animations pose the hierarchy, so they only visibly
+	// apply when the full object (HLod) is displayed — on a bare mesh
+	// Set_Animation is a no-op.
+	void Set_Animation_Asset(class HAnimClass *anim);	// takes its own ref; null clears
+	class HAnimClass *Peek_Animation_Asset() const { return m_Anim; }
+	void Play_Animation(bool play) { m_AnimPlaying = play; }
+	bool Is_Animation_Playing() const { return m_AnimPlaying; }
+	void Seek_Animation(float frame);
+	float Get_Animation_Frame() const { return m_AnimFrame; }
+
+	// The pane's current render object (borrowed pointer, no ref added); used by
+	// the frame to read the hierarchy name when listing matching animations.
+	RenderObjClass *Peek_Render_Object() const { return m_RenderObj; }
+
 	// Save/restore the full orbit-camera state so each Material Viewer tab can
 	// keep its own view. Captures the raw camera transform plus the orbit
 	// accumulators (centre / rotation / distance / zoom step) verbatim, so a
@@ -192,6 +209,11 @@ private:
 	// height, like the camera).
 	bool				m_GroundVisible;
 	float				m_GroundZ;
+
+	// Animation playback state (see Set_Animation_Asset).
+	class HAnimClass	*m_Anim;
+	bool				m_AnimPlaying;
+	float				m_AnimFrame;
 
 	// Orbit camera state — mirrors the main viewport (CGraphicView). The orbit
 	// centre and accumulated rotation are per-instance (the main view keeps its

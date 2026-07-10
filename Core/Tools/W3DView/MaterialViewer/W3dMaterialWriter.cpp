@@ -30,6 +30,13 @@
 namespace W3dMaterialViewer
 {
 
+// File > Backup File Before Change. Default on (a one-time <file>.bak is made
+// before the first save overwrites the original).
+static bool g_BackupBeforeSave = true;
+
+void Set_Backup_Before_Save(bool enabled) { g_BackupBeforeSave = enabled; }
+bool Get_Backup_Before_Save() { return g_BackupBeforeSave; }
+
 namespace
 {
 
@@ -439,10 +446,13 @@ bool SaveMaterialDocument(const MaterialDocument &document, std::string &errorMe
 		}
 	}
 
-	// One-time pristine backup; later saves keep the original .bak.
-	std::string bak_path = path + ".bak";
-	if (::GetFileAttributesA(bak_path.c_str()) == INVALID_FILE_ATTRIBUTES) {
-		::CopyFileA(path.c_str(), bak_path.c_str(), TRUE);
+	// One-time pristine backup; later saves keep the original .bak. Skipped when
+	// File > Backup File Before Change is turned off.
+	if (g_BackupBeforeSave) {
+		std::string bak_path = path + ".bak";
+		if (::GetFileAttributesA(bak_path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+			::CopyFileA(path.c_str(), bak_path.c_str(), TRUE);
+		}
 	}
 
 	if (!::ReplaceFileA(path.c_str(), tmp_path.c_str(), nullptr, 0, nullptr, nullptr)) {

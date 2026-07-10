@@ -440,6 +440,7 @@ BEGIN
         MENUITEM "&Open...\tCtrl+O",            IDM_MATVIEWER_OPEN
         MENUITEM SEPARATOR
         MENUITEM "&Save\tCtrl+S",               IDM_MATVIEWER_SAVE
+        MENUITEM "&Backup File Before Change",  IDM_MATVIEWER_BACKUP
         MENUITEM SEPARATOR
         MENUITEM "&Close",                      IDM_MATVIEWER_CLOSE
     END

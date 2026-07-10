@@ -3233,6 +3233,237 @@ void SetGroundSliderChangedCallback(void (*callback)(int pos))
 	g_GroundSliderChangedCallback = callback;
 }
 
+//////////////////////////////////////////////////////////////////////////////
+//	Animation bar
+
+// Palette-tinted media glyphs (play / pause / stop). Fusion's SP_Media* icons
+// are fixed dark drawings that all but vanish on the dark theme, so paint the
+// glyphs with the current text colour instead (same recipe as the tab-bar
+// close cross); Refresh_Anim_Bar_Icons re-tints them on a theme switch.
+enum { MEDIA_GLYPH_PLAY = 0, MEDIA_GLYPH_PAUSE, MEDIA_GLYPH_STOP };
+
+static QIcon Make_Media_Icon(int glyph)
+{
+	const QColor color = QApplication::palette().color(QPalette::WindowText);
+	QPixmap pixmap(16, 16);
+	pixmap.fill(Qt::transparent);
+	{
+		QPainter painter(&pixmap);
+		painter.setRenderHint(QPainter::Antialiasing, true);
+		painter.setPen(Qt::NoPen);
+		painter.setBrush(color);
+		switch (glyph) {
+			case MEDIA_GLYPH_PLAY: {
+				const QPointF triangle[3] = {
+					QPointF(5.0, 3.5), QPointF(12.5, 8.0), QPointF(5.0, 12.5) };
+				painter.drawPolygon(triangle, 3);
+				break;
+			}
+			case MEDIA_GLYPH_PAUSE:
+				painter.drawRect(QRectF(4.5, 3.5, 2.5, 9.0));
+				painter.drawRect(QRectF(9.0, 3.5, 2.5, 9.0));
+				break;
+			case MEDIA_GLYPH_STOP:
+			default:
+				painter.drawRect(QRectF(4.5, 4.5, 7.0, 7.0));
+				break;
+		}
+	}
+	return QIcon(pixmap);
+}
+
+QWidget *g_AnimBar = nullptr;
+QComboBox *g_AnimCombo = nullptr;
+QToolButton *g_AnimPlayButton = nullptr;
+QToolButton *g_AnimStopButton = nullptr;
+QSlider *g_AnimSlider = nullptr;
+QLabel *g_AnimFrameLabel = nullptr;
+bool g_AnimBarUpdating = false;
+bool g_AnimBarPlaying = false;
+
+// Re-tints the media glyphs after a theme switch (called by ApplyPanelTheme).
+static void Refresh_Anim_Bar_Icons()
+{
+	if (g_AnimPlayButton != nullptr) {
+		g_AnimPlayButton->setIcon(Make_Media_Icon(
+			g_AnimBarPlaying ? MEDIA_GLYPH_PAUSE : MEDIA_GLYPH_PLAY));
+	}
+	if (g_AnimStopButton != nullptr) {
+		g_AnimStopButton->setIcon(Make_Media_Icon(MEDIA_GLYPH_STOP));
+	}
+}
+void (*g_AnimSelectedCallback)(int index) = nullptr;
+void (*g_AnimPlayPauseCallback)() = nullptr;
+void (*g_AnimStopCallback)() = nullptr;
+void (*g_AnimSeekCallback)(int frame) = nullptr;
+
+HWND CreateAnimBar(HWND parent)
+{
+	if (!Ensure_Application()) {
+		return nullptr;
+	}
+
+	if (g_AnimBar == nullptr) {
+		g_AnimBar = new QWidget;
+		QHBoxLayout *layout = new QHBoxLayout(g_AnimBar);
+		layout->setContentsMargins(6, 2, 6, 2);
+		layout->setSpacing(6);
+
+		g_AnimCombo = new QComboBox;
+		g_AnimCombo->setFocusPolicy(Qt::NoFocus);
+		g_AnimCombo->setMinimumWidth(130);
+		g_AnimCombo->setToolTip(QStringLiteral("Animation"));
+		layout->addWidget(g_AnimCombo);
+
+		g_AnimPlayButton = new QToolButton;
+		g_AnimPlayButton->setAutoRaise(true);
+		g_AnimPlayButton->setFocusPolicy(Qt::NoFocus);
+		g_AnimPlayButton->setIcon(Make_Media_Icon(MEDIA_GLYPH_PLAY));
+		g_AnimPlayButton->setToolTip(QStringLiteral("Play / Pause"));
+		layout->addWidget(g_AnimPlayButton);
+
+		g_AnimStopButton = new QToolButton;
+		g_AnimStopButton->setAutoRaise(true);
+		g_AnimStopButton->setFocusPolicy(Qt::NoFocus);
+		g_AnimStopButton->setIcon(Make_Media_Icon(MEDIA_GLYPH_STOP));
+		g_AnimStopButton->setToolTip(QStringLiteral("Stop (back to frame 0)"));
+		layout->addWidget(g_AnimStopButton);
+
+		g_AnimSlider = new QSlider(Qt::Horizontal);
+		g_AnimSlider->setFocusPolicy(Qt::NoFocus);
+		g_AnimSlider->setRange(0, 0);
+		layout->addWidget(g_AnimSlider, 1);
+
+		g_AnimFrameLabel = new QLabel(QStringLiteral("0 / 0"));
+		g_AnimFrameLabel->setMinimumWidth(56);
+		g_AnimFrameLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+		layout->addWidget(g_AnimFrameLabel);
+
+		QObject::connect(g_AnimCombo, QOverload<int>::of(&QComboBox::activated), [](int index) {
+			if (!g_AnimBarUpdating && g_AnimSelectedCallback != nullptr) {
+				g_AnimSelectedCallback(index);
+			}
+		});
+		QObject::connect(g_AnimPlayButton, &QToolButton::clicked, []() {
+			if (!g_AnimBarUpdating && g_AnimPlayPauseCallback != nullptr) {
+				g_AnimPlayPauseCallback();
+			}
+		});
+		QObject::connect(g_AnimStopButton, &QToolButton::clicked, []() {
+			if (!g_AnimBarUpdating && g_AnimStopCallback != nullptr) {
+				g_AnimStopCallback();
+			}
+		});
+		QObject::connect(g_AnimSlider, &QSlider::valueChanged, [](int frame) {
+			if (!g_AnimBarUpdating && g_AnimSeekCallback != nullptr) {
+				g_AnimSeekCallback(frame);
+			}
+		});
+	}
+
+	// Same reparenting dance as CreateTabBar.
+	g_AnimBar->setWindowFlags(g_AnimBar->windowFlags() | Qt::FramelessWindowHint);
+
+	HWND hwnd = (HWND)g_AnimBar->winId();
+	::SetParent(hwnd, parent);
+	LONG style_bits = ::GetWindowLong(hwnd, GWL_STYLE);
+	style_bits &= ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME);
+	style_bits |= WS_CHILD;
+	::SetWindowLong(hwnd, GWL_STYLE, style_bits);
+
+	g_AnimBar->setAttribute(Qt::WA_Resized, true);
+	g_AnimBar->show();
+	return hwnd;
+}
+
+void DestroyAnimBar()
+{
+	if (g_AnimBar != nullptr) {
+		delete g_AnimBar;
+		g_AnimBar = nullptr;
+		g_AnimCombo = nullptr;
+		g_AnimPlayButton = nullptr;
+		g_AnimStopButton = nullptr;
+		g_AnimSlider = nullptr;
+		g_AnimFrameLabel = nullptr;
+	}
+}
+
+void ResizeAnimBar(int width, int height)
+{
+	if (g_AnimBar != nullptr) {
+		g_AnimBar->resize(width, height);
+	}
+}
+
+int GetAnimBarPreferredHeight()
+{
+	return (g_AnimBar != nullptr) ? g_AnimBar->sizeHint().height() : 0;
+}
+
+void SetAnimBarAnims(const char *const *names, int count, int current)
+{
+	if (g_AnimCombo == nullptr) {
+		return;
+	}
+	g_AnimBarUpdating = true;
+	g_AnimCombo->clear();
+	for (int i = 0; i < count; i++) {
+		QString full = QString::fromLocal8Bit(names[i]);
+		int dot = full.lastIndexOf(QLatin1Char('.'));
+		g_AnimCombo->addItem(dot >= 0 ? full.mid(dot + 1) : full);
+		g_AnimCombo->setItemData(i, full, Qt::ToolTipRole);
+	}
+	if (current >= 0 && current < count) {
+		g_AnimCombo->setCurrentIndex(current);
+	}
+	g_AnimBarUpdating = false;
+}
+
+void SetAnimBarState(bool playing, int frame, int frameCount)
+{
+	if (g_AnimBar == nullptr) {
+		return;
+	}
+	g_AnimBarUpdating = true;
+	if (playing != g_AnimBarPlaying && g_AnimPlayButton != nullptr) {
+		g_AnimPlayButton->setIcon(Make_Media_Icon(
+			playing ? MEDIA_GLYPH_PAUSE : MEDIA_GLYPH_PLAY));
+		g_AnimBarPlaying = playing;
+	}
+	int last = (frameCount > 0) ? frameCount - 1 : 0;
+	if (g_AnimSlider != nullptr) {
+		if (g_AnimSlider->maximum() != last) {
+			g_AnimSlider->setRange(0, last);
+		}
+		g_AnimSlider->setValue(frame);
+	}
+	if (g_AnimFrameLabel != nullptr) {
+		g_AnimFrameLabel->setText(QStringLiteral("%1 / %2").arg(frame).arg(last));
+	}
+	g_AnimBarUpdating = false;
+}
+
+void SetAnimBarAnimSelectedCallback(void (*callback)(int index))
+{
+	g_AnimSelectedCallback = callback;
+}
+
+void SetAnimBarPlayPauseCallback(void (*callback)())
+{
+	g_AnimPlayPauseCallback = callback;
+}
+
+void SetAnimBarStopCallback(void (*callback)())
+{
+	g_AnimStopCallback = callback;
+}
+
+void SetAnimBarSeekCallback(void (*callback)(int frame))
+{
+	g_AnimSeekCallback = callback;
+}
+
 void SetTabBarChangedCallback(void (*callback)(int index))
 {
 	g_TabChangedCallback = callback;
@@ -3393,6 +3624,7 @@ void ApplyPanelTheme(const PanelTheme &theme)
 		g_Panel->Apply_Theme(theme);
 	}
 	Refresh_Tab_Close_Icons();
+	Refresh_Anim_Bar_Icons();
 }
 
 void PumpQtEvents()
@@ -3412,6 +3644,7 @@ void ShutdownQt()
 	DestroyPanel();
 	DestroyTabBar();
 	DestroyGroundSlider();
+	DestroyAnimBar();
 	if (g_Application != nullptr) {
 		delete g_Application;
 		g_Application = nullptr;

@@ -182,6 +182,36 @@ void SetGroundSliderPos(int pos);
 // Invoked (synchronously, on the UI thread) when the USER moves the slider.
 void SetGroundSliderChangedCallback(void (*callback)(int pos));
 
+//////////////////////////////////////////////////////////////////////////////
+//	Animation bar
+//
+// A thin Qt playback strip hosted under the 3D preview (same reparenting dance
+// as the tab bar): animation combo, play/pause, stop, frame slider and a frame
+// counter. The bar is pure UI — the host owns playback (the preview pane
+// advances the frames). Programmatic updates never fire the callbacks.
+
+HWND CreateAnimBar(HWND parent);
+void DestroyAnimBar();
+void ResizeAnimBar(int width, int height);
+
+// Preferred strip height for the current style/font (0 when no bar).
+int GetAnimBarPreferredHeight();
+
+// Replaces the animation list. `names` are the full asset names
+// ("HTREE.ANIMNAME"); the combo displays the part after the last '.'.
+// Selects index `current`. Emits no callbacks.
+void SetAnimBarAnims(const char *const *names, int count, int current);
+
+// Pushes playback state into the bar: play/pause glyph, slider range/position,
+// and the "frame / last" counter. Emits no callbacks.
+void SetAnimBarState(bool playing, int frame, int frameCount);
+
+// User interaction callbacks (synchronous, on the UI thread).
+void SetAnimBarAnimSelectedCallback(void (*callback)(int index));
+void SetAnimBarPlayPauseCallback(void (*callback)());
+void SetAnimBarStopCallback(void (*callback)());
+void SetAnimBarSeekCallback(void (*callback)(int frame));
+
 void ApplyPanelTheme(const PanelTheme &theme);
 
 // Delivers Qt posted events/timers. Qt's native child windows receive input

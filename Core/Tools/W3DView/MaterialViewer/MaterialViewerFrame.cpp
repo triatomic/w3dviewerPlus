@@ -33,6 +33,9 @@
 #include "assetmgr.h"
 #include "dx8wrapper.h"
 #include "ffactory.h"
+#include "hanim.h"
+#include "htree.h"
+#include "rendobj.h"
 #include "shader.h"
 #include <d3dx8tex.h>
 #include <map>
@@ -327,6 +330,8 @@ BEGIN_MESSAGE_MAP(CMaterialViewerFrame, CFrameWnd)
 	ON_COMMAND(IDM_MATVIEWER_CLOSE, OnFileClose)
 	ON_COMMAND(IDM_MATVIEWER_SAVE, OnFileSave)
 	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_SAVE, OnUpdateFileSave)
+	ON_COMMAND(IDM_MATVIEWER_BACKUP, OnToggleBackup)
+	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_BACKUP, OnUpdateToggleBackup)
 	ON_COMMAND(IDM_MATVIEWER_UNDO, OnEditUndo)
 	ON_UPDATE_COMMAND_UI(IDM_MATVIEWER_UNDO, OnUpdateEditUndo)
 	ON_COMMAND(IDM_MATVIEWER_REDO, OnEditRedo)
@@ -575,6 +580,10 @@ CMaterialViewerFrame::CMaterialViewerFrame()
 	  m_PanelWnd(nullptr),
 	  m_TabBarWnd(nullptr),
 	  m_GroundSliderWnd(nullptr),
+	  m_AnimBarWnd(nullptr),
+	  m_AnimBarVisible(false),
+	  m_LastAnimFrame(-1),
+	  m_LastAnimPlaying(false),
 	  m_ActiveTab(-1),
 	  m_LivePreviewPending(false),
 	  m_BatchEdit(false),
@@ -701,6 +710,8 @@ CMaterialViewerFrame::RenderActivePreview()
 #endif
 		if (_TheInstance->m_Preview != nullptr) {
 			_TheInstance->m_Preview->Render();
+			// Mirror playback into the animation bar (cheap; change-detected).
+			_TheInstance->PushAnimBarState();
 		}
 	}
 }
@@ -817,6 +828,10 @@ CMaterialViewerFrame::OnCreate(LPCREATESTRUCT create_struct)
 			? CMaterialPreviewPane::LIGHT_PER_FACE
 			: CMaterialPreviewPane::LIGHT_FREE_ROAM);
 
+	// Restore the "backup before change" preference (default on).
+	W3dMaterialViewer::Set_Backup_Before_Save(
+		::AfxGetApp()->GetProfileInt("Config", "MatViewerBackupBeforeSave", 1) != 0);
+
 #ifdef W3DVIEW_HAS_QT
 	m_PanelWnd = W3dMaterialViewer::CreatePanel(m_hWnd);
 	m_TabBarWnd = W3dMaterialViewer::CreateTabBar(m_hWnd);
@@ -833,6 +848,17 @@ CMaterialViewerFrame::OnCreate(LPCREATESTRUCT create_struct)
 		W3dMaterialViewer::SetGroundSliderChangedCallback(&CMaterialViewerFrame::GroundSliderChangedThunk);
 		W3dMaterialViewer::SetGroundSliderPos(GROUND_SLIDER_STEPS / 2);
 		::ShowWindow(m_GroundSliderWnd, SW_HIDE);	// shown with the toggle
+	}
+
+	// Animation bar: Qt playback strip docked under the preview, shown only
+	// when the previewed model's hierarchy has animations (RefreshAnimBar).
+	m_AnimBarWnd = W3dMaterialViewer::CreateAnimBar(m_hWnd);
+	if (m_AnimBarWnd != nullptr) {
+		W3dMaterialViewer::SetAnimBarAnimSelectedCallback(&CMaterialViewerFrame::AnimSelectedThunk);
+		W3dMaterialViewer::SetAnimBarPlayPauseCallback(&CMaterialViewerFrame::AnimPlayPauseThunk);
+		W3dMaterialViewer::SetAnimBarStopCallback(&CMaterialViewerFrame::AnimStopThunk);
+		W3dMaterialViewer::SetAnimBarSeekCallback(&CMaterialViewerFrame::AnimSeekThunk);
+		::ShowWindow(m_AnimBarWnd, SW_HIDE);	// shown when animations exist
 	}
 
 	W3dMaterialViewer::SetPanelMeshSelectedCallback(&CMaterialViewerFrame::PanelMeshSelectedThunk);
@@ -912,6 +938,14 @@ CMaterialViewerFrame::OnDestroy()
 		W3dMaterialViewer::SetGroundSliderChangedCallback(nullptr);
 		W3dMaterialViewer::DestroyGroundSlider();
 		m_GroundSliderWnd = nullptr;
+	}
+	if (m_AnimBarWnd != nullptr) {
+		W3dMaterialViewer::SetAnimBarAnimSelectedCallback(nullptr);
+		W3dMaterialViewer::SetAnimBarPlayPauseCallback(nullptr);
+		W3dMaterialViewer::SetAnimBarStopCallback(nullptr);
+		W3dMaterialViewer::SetAnimBarSeekCallback(nullptr);
+		W3dMaterialViewer::DestroyAnimBar();
+		m_AnimBarWnd = nullptr;
 	}
 	if (m_PanelWnd != nullptr) {
 		W3dMaterialViewer::DestroyPanel();
@@ -1018,8 +1052,25 @@ CMaterialViewerFrame::Layout(int cx, int cy)
 	}
 #endif
 
+	// Animation bar docked under the preview (only when the model has
+	// animations); the preview shrinks by the bar's height.
+	int anim_height = 0;
+#ifdef W3DVIEW_HAS_QT
+	if (m_AnimBarWnd != nullptr) {
+		if (m_AnimBarVisible) {
+			anim_height = W3dMaterialViewer::GetAnimBarPreferredHeight();
+			W3dMaterialViewer::ResizeAnimBar(preview_width - slider_width, anim_height);
+			::MoveWindow(m_AnimBarWnd, slider_width, tab_height + body_height - anim_height,
+				preview_width - slider_width, anim_height, TRUE);
+			::ShowWindow(m_AnimBarWnd, SW_SHOW);
+		} else {
+			::ShowWindow(m_AnimBarWnd, SW_HIDE);
+		}
+	}
+#endif
+
 	if ((m_Preview != nullptr) && ::IsWindow(m_Preview->m_hWnd)) {
-		m_Preview->MoveWindow(slider_width, tab_height, preview_width - slider_width, body_height);
+		m_Preview->MoveWindow(slider_width, tab_height, preview_width - slider_width, body_height - anim_height);
 	}
 
 	if (m_PanelWnd != nullptr) {
@@ -1389,6 +1440,22 @@ CMaterialViewerFrame::OnUpdateFileSave(CCmdUI *cmd_ui)
 #endif
 }
 
+// File > Backup File Before Change: when checked, the first save of a file makes
+// a one-time <file>.bak before overwriting. Persisted to the MFC profile.
+void
+CMaterialViewerFrame::OnToggleBackup()
+{
+	bool enabled = !W3dMaterialViewer::Get_Backup_Before_Save();
+	W3dMaterialViewer::Set_Backup_Before_Save(enabled);
+	::AfxGetApp()->WriteProfileInt("Config", "MatViewerBackupBeforeSave", enabled ? 1 : 0);
+}
+
+void
+CMaterialViewerFrame::OnUpdateToggleBackup(CCmdUI *cmd_ui)
+{
+	cmd_ui->SetCheck(W3dMaterialViewer::Get_Backup_Before_Save() ? 1 : 0);
+}
+
 void
 CMaterialViewerFrame::OnEditUndo()
 {
@@ -1504,6 +1571,185 @@ CMaterialViewerFrame::SyncSelectedMeshAcrossTabs(const char *meshName)
 }
 
 ////////////////////////////////////////////////////////////////////////////
+//	Animation bar
+////////////////////////////////////////////////////////////////////////////
+
+void
+CMaterialViewerFrame::RefreshAnimBar()
+{
+#ifdef W3DVIEW_HAS_QT
+	if (m_AnimBarWnd == nullptr || m_Preview == nullptr) {
+		return;
+	}
+
+	// Hierarchy the previewed file's object animates with. The pane may be
+	// showing a bare mesh (no HTree), so fall back to a throwaway instance of
+	// the file's top-level object to read the skeleton name — animations can
+	// live on a shared skeleton whose name differs from the container's.
+	StringClass hierarchy_name;
+	RenderObjClass *obj = m_Preview->Peek_Render_Object();
+	const HTreeClass *tree = (obj != nullptr) ? obj->Get_HTree() : nullptr;
+	if (tree != nullptr) {
+		hierarchy_name = tree->Get_Name();
+	} else if (HasTabs() && !Active().topLevelName.empty()) {
+		RenderObjClass *tmp = WW3DAssetManager::Get_Instance()->Create_Render_Obj(
+			Active().topLevelName.c_str());
+		if (tmp != nullptr) {
+			const HTreeClass *tmp_tree = tmp->Get_HTree();
+			if (tmp_tree != nullptr) {
+				hierarchy_name = tmp_tree->Get_Name();
+			}
+			tmp->Release_Ref();
+		}
+	}
+
+	std::vector<std::string> names;
+	if (!hierarchy_name.Is_Empty()) {
+		AssetIterator *iter = WW3DAssetManager::Get_Instance()->Create_HAnim_Iterator();
+		if (iter != nullptr) {
+			for (iter->First(); iter->Is_Done() == FALSE; iter->Next()) {
+				HAnimClass *anim = WW3DAssetManager::Get_Instance()->Get_HAnim(iter->Current_Item_Name());
+				if (anim != nullptr) {
+					if (::_stricmp(anim->Get_HName(), hierarchy_name.str()) == 0) {
+						names.push_back(iter->Current_Item_Name());
+					}
+					anim->Release_Ref();
+				}
+			}
+			delete iter;
+		}
+	}
+
+	// Unchanged list: keep the current selection and playback untouched (this
+	// runs on every preview-model update, e.g. a mesh click during playback).
+	if (names == m_AnimNames) {
+		return;
+	}
+	m_AnimNames.swap(names);
+
+	std::vector<const char *> ptrs;
+	for (const std::string &name : m_AnimNames) {
+		ptrs.push_back(name.c_str());
+	}
+	W3dMaterialViewer::SetAnimBarAnims(ptrs.empty() ? nullptr : &ptrs[0],
+		(int)m_AnimNames.size(), 0);
+
+	// Select the first animation (paused at frame 0) so Play works immediately;
+	// clear the pane's animation when none match.
+	HAnimClass *first = m_AnimNames.empty() ? nullptr
+		: WW3DAssetManager::Get_Instance()->Get_HAnim(m_AnimNames.front().c_str());
+	m_Preview->Play_Animation(false);
+	m_Preview->Set_Animation_Asset(first);
+	if (first != nullptr) {
+		first->Release_Ref();	// the pane holds its own ref
+	}
+	m_LastAnimFrame = -1;	// force the next PushAnimBarState to update the bar
+
+	bool visible = !m_AnimNames.empty();
+	if (visible != m_AnimBarVisible) {
+		m_AnimBarVisible = visible;
+		ReassertLayout();
+	}
+#endif
+}
+
+void
+CMaterialViewerFrame::PushAnimBarState()
+{
+#ifdef W3DVIEW_HAS_QT
+	if (m_AnimBarWnd == nullptr || !m_AnimBarVisible || m_Preview == nullptr) {
+		return;
+	}
+	HAnimClass *anim = m_Preview->Peek_Animation_Asset();
+	int frame = (int)m_Preview->Get_Animation_Frame();
+	bool playing = m_Preview->Is_Animation_Playing();
+	if (frame == m_LastAnimFrame && playing == m_LastAnimPlaying) {
+		return;
+	}
+	m_LastAnimFrame = frame;
+	m_LastAnimPlaying = playing;
+	W3dMaterialViewer::SetAnimBarState(playing, frame,
+		(anim != nullptr) ? anim->Get_Num_Frames() : 0);
+#endif
+}
+
+void
+CMaterialViewerFrame::OnAnimSelected(int index)
+{
+	if (m_Preview == nullptr || index < 0 || index >= (int)m_AnimNames.size()) {
+		return;
+	}
+	HAnimClass *anim = WW3DAssetManager::Get_Instance()->Get_HAnim(m_AnimNames[index].c_str());
+	m_Preview->Set_Animation_Asset(anim);
+	if (anim != nullptr) {
+		anim->Release_Ref();	// the pane holds its own ref
+	}
+	m_LastAnimFrame = -1;
+}
+
+void
+CMaterialViewerFrame::OnAnimPlayPause()
+{
+	if (m_Preview == nullptr || m_AnimNames.empty()) {
+		return;
+	}
+	// Animations pose the whole hierarchy; a bare mesh has no skeleton, so
+	// playing from the single-mesh view switches to the full object first.
+	if (HasTabs() && !Active().showFullObject) {
+		OnShowFullObject();
+	}
+	m_Preview->Play_Animation(!m_Preview->Is_Animation_Playing());
+	m_LastAnimFrame = -1;
+}
+
+void
+CMaterialViewerFrame::OnAnimStop()
+{
+	if (m_Preview == nullptr) {
+		return;
+	}
+	m_Preview->Play_Animation(false);
+	m_Preview->Seek_Animation(0.0F);
+	m_LastAnimFrame = -1;
+}
+
+void
+CMaterialViewerFrame::OnAnimSeek(int frame)
+{
+	if (m_Preview != nullptr) {
+		m_Preview->Seek_Animation((float)frame);
+	}
+}
+
+void CMaterialViewerFrame::AnimSelectedThunk(int index)
+{
+	if (_TheInstance != nullptr) {
+		_TheInstance->OnAnimSelected(index);
+	}
+}
+
+void CMaterialViewerFrame::AnimPlayPauseThunk()
+{
+	if (_TheInstance != nullptr) {
+		_TheInstance->OnAnimPlayPause();
+	}
+}
+
+void CMaterialViewerFrame::AnimStopThunk()
+{
+	if (_TheInstance != nullptr) {
+		_TheInstance->OnAnimStop();
+	}
+}
+
+void CMaterialViewerFrame::AnimSeekThunk(int frame)
+{
+	if (_TheInstance != nullptr) {
+		_TheInstance->OnAnimSeek(frame);
+	}
+}
+
+////////////////////////////////////////////////////////////////////////////
 //
 //	Preview model selection: the pane shows the mesh selected in the material
 //	panel unless the View > Show Full Object toggle is on.
@@ -1544,12 +1790,20 @@ CMaterialViewerFrame::UpdatePreviewModel()
 
 	// The model (and so the ground plane's default height/range) may have changed.
 	SyncGroundSlider();
+
+	// Re-list the animations for the (possibly different) previewed hierarchy.
+	RefreshAnimBar();
 }
 
 void
 CMaterialViewerFrame::OnShowFullObject()
 {
 	Active().showFullObject = !Active().showFullObject;
+	// Animations pose the full hierarchy; leaving the full-object view stops
+	// playback (the single mesh has no skeleton to animate).
+	if (!Active().showFullObject && m_Preview != nullptr) {
+		m_Preview->Play_Animation(false);
+	}
 	UpdatePreviewModel();
 }
 

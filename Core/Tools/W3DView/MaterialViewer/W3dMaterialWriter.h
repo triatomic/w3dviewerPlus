@@ -40,4 +40,10 @@ namespace W3dMaterialViewer
 // a failed save.
 bool SaveMaterialDocument(const MaterialDocument &document, std::string &errorMessage);
 
+// Whether a save makes a one-time pristine <file>.bak before replacing the
+// original (File > Backup File Before Change). Default true. When off, saves
+// overwrite in place with no .bak created.
+void Set_Backup_Before_Save(bool enabled);
+bool Get_Backup_Before_Save();
+
 } // namespace W3dMaterialViewer
